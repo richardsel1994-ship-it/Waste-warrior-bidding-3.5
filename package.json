@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "seed": "node --disable-warning=ExperimentalWarning server/seed.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

@@ -20,6 +20,8 @@
   }
   const money = (c) => new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(c / 100);
   const img = (name) => `/uploads/${encodeURIComponent(name)}`;
+  const ICONS = { Plastic: '🧴', Metal: '🔩', Paper: '📦', Glass: '🍾', 'E-waste': '🔌', Organic: '🌱', Textile: '👕', Wood: '🪵' };
+  const skeletons = (n) => Array.from({ length: n }, () => h('div', { class: 'card skel' }, h('div', { class: 'photo' }), h('div', { class: 'body' }, h('div', { class: 'line' }), h('div', { class: 'line short' }))));
   const kg = (n) => `${Number(n).toLocaleString()} kg`;
 
   async function api(method, url, body) {
@@ -68,11 +70,11 @@
       link('#/', 'Browse'),
       ...(state.user ? [
         link('#/dashboard', 'My activity'),
-        link('#/post', 'Sell waste', 'cta'),
+        link('#/post', 'Sell waste', 'nav-cta'),
         h('button', { class: 'link', text: `Log out (${state.user.name.split(' ')[0]})`, onclick: logout }),
       ] : [
         link('#/login', 'Log in'),
-        link('#/register', 'Sign up', 'cta'),
+        link('#/register', 'Sign up', 'nav-cta'),
       ]));
   }
   async function logout() {
@@ -87,20 +89,20 @@
   function card(l) {
     return h('a', { class: 'card', href: `#/listing/${l.id}` },
       h('div', { class: 'photo' },
-        l.images[0] && h('img', { src: img(l.images[0]), alt: l.title, loading: 'lazy' }),
-        h('span', { class: 'badge', text: l.category }),
+        l.images[0] ? h('img', { src: img(l.images[0]), alt: l.title, loading: 'lazy' }) : h('span', { class: 'ph', text: ICONS[l.category] || '♻' }),
+        h('span', { class: 'badge', text: `${ICONS[l.category] || ''} ${l.category}` }),
         timer(l.endsAt, 'time')),
       h('div', { class: 'body' },
         h('h3', { text: l.title }),
         h('div', { class: 'muted', text: `${kg(l.qtyKg)} · ${l.location}` }),
         h('div', { class: 'price-row' },
-          h('span', { class: 'price', text: money(l.currentBidCents) }),
-          h('span', { class: 'muted', text: `${l.bidCount} bid${l.bidCount === 1 ? '' : 's'}` }))));
+          h('div', {}, h('div', { class: 'tiny', text: l.bidCount ? 'Current bid' : 'Starting at' }), h('span', { class: 'price', text: money(l.currentBidCents) })),
+          h('span', { class: 'bidchip' + (l.bidCount ? ' hot' : ''), text: l.bidCount ? `🔥 ${l.bidCount} bid${l.bidCount === 1 ? '' : 's'}` : 'Be first' }))));
   }
 
   async function viewHome() {
     const filters = { category: 'all', search: '', sort: 'ending' };
-    const grid = h('div', { class: 'grid' });
+    const grid = h('div', { class: 'grid' }, ...skeletons(6));
     const stats = h('div', { class: 'stats' });
     let reqId = 0;
 
@@ -138,21 +140,43 @@
       ...[['ending', 'Ending soonest'], ['newest', 'Newest'], ['priceLow', 'Price: low to high'], ['priceHigh', 'Price: high to low'], ['popular', 'Most bids']]
         .map(([v, t]) => h('option', { value: v, text: t })));
 
+    const tiles = h('div', { class: 'tiles' }, ...state.config.categories.map((c) =>
+      h('button', { class: 'tile', type: 'button', onclick: () => { filters.category = c; drawChips(); load(); document.getElementById('browse').scrollIntoView(); } },
+        h('span', { class: 'ico', text: ICONS[c] || '♻' }), h('span', { text: c }))));
+    const feature = (ico, title, text) => h('div', { class: 'feature' }, h('div', { class: 'ico', text: ico }), h('h3', { text: title }), h('p', { class: 'muted', text }));
+
     $main.replaceChildren(
       h('section', { class: 'hero' },
-        h('h1', { text: 'Turn waste into value.' }),
-        h('p', { text: 'Photograph your recyclables, set a starting price, and let verified collectors compete for them. Winners pay securely online.' }),
-        h('div', { class: 'actions' },
-          h('a', { class: 'btn accent', href: state.user ? '#/post' : '#/register', text: 'Start selling' }),
-          h('button', { class: 'btn secondary', type: 'button', text: 'Browse auctions', onclick: () => document.getElementById('browse').scrollIntoView() }))),
+        h('div', { class: 'hero-copy' },
+          h('span', { class: 'eyebrow', text: '♻ The marketplace for recyclables' }),
+          h('h1', {}, 'Turn your waste into ', h('span', { class: 'hl', text: 'cash' }), '.'),
+          h('p', { text: 'List plastics, metals, paper and more with photos. Collectors compete in live auctions, and the winner pays securely online.' }),
+          h('div', { class: 'actions' },
+            h('a', { class: 'btn accent lg', href: state.user ? '#/post' : '#/register', text: 'Start selling — it’s free' }),
+            h('button', { class: 'btn ghost lg', type: 'button', text: 'Browse auctions', onclick: () => document.getElementById('browse').scrollIntoView() })),
+          h('ul', { class: 'trust' }, h('li', { text: '🔒 Card payments by Stripe' }), h('li', { text: '⏱ Anti-sniping auctions' }), h('li', { text: '📸 Photo listings' }))),
+        h('img', { class: 'hero-art', src: '/hero.svg', alt: '' })),
       stats,
-      h('section', { class: 'steps' },
-        h('div', { class: 'step' }, h('div', { class: 'n', text: '1' }), h('h3', { text: 'Post with photos' }), h('p', { class: 'muted', text: 'Describe the material, add up to 4 photos, choose how long the auction runs.' })),
-        h('div', { class: 'step' }, h('div', { class: 'n', text: '2' }), h('h3', { text: 'Collectors bid' }), h('p', { class: 'muted', text: 'Live bidding with anti-sniping protection so late bids never catch you out.' })),
-        h('div', { class: 'step' }, h('div', { class: 'n', text: '3' }), h('h3', { text: 'Winner pays' }), h('p', { class: 'muted', text: 'The highest bidder pays by card through Stripe, then arranges pickup.' }))),
-      h('h2', { id: 'browse', text: 'Live auctions' }),
-      h('div', { class: 'toolbar' }, search, sort),
-      chips, grid);
+      h('section', { class: 'block' },
+        h('h2', { text: 'Shop by material' }), tiles),
+      h('section', { class: 'block' },
+        h('h2', { text: 'How it works' }),
+        h('div', { class: 'steps' },
+          h('div', { class: 'step' }, h('div', { class: 'n', text: '1' }), h('h3', { text: 'Post with photos' }), h('p', { class: 'muted', text: 'Describe the material, add up to 4 photos and choose how long the auction runs.' })),
+          h('div', { class: 'step' }, h('div', { class: 'n', text: '2' }), h('h3', { text: 'Collectors bid' }), h('p', { class: 'muted', text: 'Bids update live. Late bids extend the clock so you always get the best price.' })),
+          h('div', { class: 'step' }, h('div', { class: 'n', text: '3' }), h('h3', { text: 'Winner pays' }), h('p', { class: 'muted', text: 'The highest bidder pays by card through Stripe, then arranges pickup with you.' })))),
+      h('section', { class: 'block', id: 'browse-wrap' },
+        h('h2', { id: 'browse', text: 'Live auctions' }),
+        h('div', { class: 'toolbar' }, search, sort),
+        chips, grid),
+      h('section', { class: 'block' },
+        h('div', { class: 'features' },
+          feature('🌍', 'Keep it out of landfill', 'Materials go to people who will actually reuse and recycle them.'),
+          feature('💷', 'Get paid what it’s worth', 'Competitive bidding finds the real market price for your waste.'),
+          feature('🛡', 'Safe by design', 'Hashed passwords, verified uploads and payments handled entirely by Stripe.'))),
+      h('section', { class: 'cta' },
+        h('div', {}, h('h2', { text: 'Got waste worth something?' }), h('p', { text: 'List it in two minutes and let the bids roll in.' })),
+        h('a', { class: 'btn accent lg', href: state.user ? '#/post' : '#/register', text: state.user ? 'Post a listing' : 'Create free account' })));
 
     api('GET', '/api/stats').then((s) => {
       stats.replaceChildren(
