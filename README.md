@@ -21,6 +21,7 @@ DEMO_PAYMENTS=1 npm start
 Open http://localhost:3000. With `DEMO_PAYMENTS=1` the "Pay" button simulates a payment so you can try the whole flow without Stripe. Other settings are listed in `.env.example` (set them as environment variables).
 
 ```sh
+npm run seed   # optional: demo listings for development (refuses to run in production)
 npm test
 ```
 
