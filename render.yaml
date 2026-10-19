@@ -1,0 +1,21 @@
+# One-click deploy on Render: https://render.com/deploy?repo=https://github.com/richardsel1994-ship-it/Waste-warrior-bidding-3.5
+# A persistent disk requires a paid Render plan (the free plan loses data on restart).
+services:
+  - type: web
+    name: waste-warrior-bidding
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/config
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: BASE_URL
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
