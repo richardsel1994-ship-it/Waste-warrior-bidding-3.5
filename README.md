@@ -36,7 +36,7 @@ Test card: `4242 4242 4242 4242`, any future date, any CVC.
 
 ## Deploy
 
-GitHub Pages can't run this (it needs a server). Any Node host works; the included `Dockerfile` runs anywhere (Render, Railway, Fly.io, a VPS…). Set the variables from `.env.example`, set `NODE_ENV=production`, and mount a **persistent disk** at `/data` — it holds the SQLite database and uploaded photos.
+GitHub Pages can't run this (it needs a server). Any Node host works; the included `Dockerfile` runs anywhere (Render, Railway, Fly.io, a VPS…). On Render, `render.yaml` sets this up for you (New → Blueprint, pick this repo; the persistent disk needs a paid plan). Otherwise set the variables from `.env.example`, set `NODE_ENV=production`, and mount a **persistent disk** at `/data` — it holds the SQLite database and uploaded photos.
 
 ## Layout
 
