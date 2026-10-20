@@ -154,7 +154,8 @@
         h('span', { class: 'ico', text: ICONS[c] || '♻' }), h('span', { text: c }))));
     const feature = (ico, title, text) => h('div', { class: 'feature' }, h('div', { class: 'ico', text: ico }), h('h3', { text: title }), h('p', { class: 'muted', text }));
     const estimates = [
-      ['Single chair or fridge', '£30–£200'],
+      ['Single chair', '£10–£30'],
+      ['Fridge', '£30–£200'],
       ['Bathroom rip-out', 'About £250'],
       ['Garden clearance', 'About £400'],
       ['House clearance', 'About £1,000'],
