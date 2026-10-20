@@ -69,6 +69,20 @@ function migrate(db) {
     if (!cols.includes(name)) db.exec(`ALTER TABLE listings ADD COLUMN ${name} ${type}`);
   }
   if (cols.includes('qty_kg')) db.exec('ALTER TABLE listings DROP COLUMN qty_kg');
+
+  // Waste carrier registration, for people who collect waste (haulers).
+  const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  const addUser = {
+    carrier_number: "TEXT NOT NULL DEFAULT ''",
+    carrier_status: "TEXT NOT NULL DEFAULT ''",
+    carrier_name: "TEXT NOT NULL DEFAULT ''",
+    carrier_tier: "TEXT NOT NULL DEFAULT ''",
+    carrier_expires: "TEXT NOT NULL DEFAULT ''",
+    carrier_checked_at: 'INTEGER',
+  };
+  for (const [name, type] of Object.entries(addUser)) {
+    if (!userCols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+  }
 }
 
 // Run fn inside an immediate transaction so concurrent bids serialize.
