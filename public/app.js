@@ -147,6 +147,12 @@
       h('button', { class: 'tile', type: 'button', onclick: () => { filters.category = c; drawChips(); load(); document.getElementById('browse').scrollIntoView(); } },
         h('span', { class: 'ico', text: ICONS[c] || '♻' }), h('span', { text: c }))));
     const feature = (ico, title, text) => h('div', { class: 'feature' }, h('div', { class: 'ico', text: ico }), h('h3', { text: title }), h('p', { class: 'muted', text }));
+    const estimates = [
+      ['Single chair or fridge', '£30–£200'],
+      ['Bathroom rip-out', 'About £250'],
+      ['Garden clearance', 'About £400'],
+      ['House clearance', 'About £1,000'],
+    ];
 
     $main.replaceChildren(
       h('section', { class: 'hero' },
@@ -162,6 +168,13 @@
       stats,
       h('section', { class: 'block' },
         h('h2', { text: 'Browse by waste type' }), tiles),
+      h('section', { class: 'block', 'aria-labelledby': 'estimate-title' },
+        h('h2', { id: 'estimate-title', text: 'Rough price guide' }),
+        h('p', { class: 'muted estimate-note', text: 'Use these as starting estimates. The final price depends on the amount of waste, access, and collection location.' }),
+        h('table', { class: 'estimates' },
+          h('thead', {}, h('tr', {}, h('th', { scope: 'col', text: 'Job type' }), h('th', { scope: 'col', text: 'Estimated budget' }))),
+          h('tbody', {}, ...estimates.map(([job, price]) => h('tr', {}, h('th', { scope: 'row', text: job }), h('td', { text: price }))))),
+        h('p', { class: 'hint', text: 'These are rough guides, not guaranteed quotes. Providers compete to offer a lower price.' })),
       h('section', { class: 'block' },
         h('h2', { text: 'How it works' }),
         h('div', { class: 'steps' },
