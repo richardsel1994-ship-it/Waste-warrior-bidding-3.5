@@ -1,7 +1,7 @@
 (() => {
   const $main = document.getElementById('main');
   const $nav = document.getElementById('nav');
-  const state = { user: null, config: { categories: [], loadSizes: [], maxImages: 4, paymentMode: 'off' } };
+  const state = { user: null, config: { categories: [], loadSizes: [], maxImages: 4, paymentMode: 'off', feePercent: 10 } };
   let pollTimer = null;
   let tickTimer = null;
 
@@ -273,7 +273,7 @@
         h('label', {}, 'Collect from', h('input', { name: 'collectFrom', type: 'date', min: isoDay(0), value: isoDay(3), required: true })),
         h('label', {}, 'Collect by', h('input', { name: 'collectBy', type: 'date', min: isoDay(0), value: isoDay(10), required: true })),
         h('label', {}, 'Maximum budget (£)', h('input', { name: 'startPrice', type: 'number', min: 1, step: '0.01', required: true }),
-          h('span', { class: 'hint', text: 'Bids start here and go down' })),
+          h('span', { class: 'hint', text: `Bids start here and go down. A ${state.config.feePercent}% service fee is added when you pay.` })),
         h('label', {}, 'Bidding open for', h('select', { name: 'durationHours' },
           ...[[24, '1 day'], [72, '3 days'], [168, '7 days'], [336, '14 days']].map(([v, t]) => h('option', { value: v, text: t, selected: v === 72 })))),
         h('label', {}, 'Town or postcode area', h('input', { name: 'location', maxlength: 100, required: true, placeholder: 'e.g. Leeds LS6' }),
@@ -339,7 +339,7 @@
           const amount = h('input', { type: 'number', step: '0.01', min: 1, max: l.maxNextBidCents / 100, value: (l.maxNextBidCents / 100).toFixed(2), 'aria-label': 'Your price in pounds' });
           const form = h('form', { novalidate: true },
             h('div', { class: 'bid-row' }, amount, h('button', { class: 'btn', type: 'submit', text: 'Place bid' })),
-            h('div', { class: 'hint', text: `Your price for the whole job. Must be ${money(l.maxNextBidCents)} or less.` }));
+            h('div', { class: 'hint', text: `Your price for the whole job. Must be ${money(l.maxNextBidCents)} or less. You receive ${100 - state.config.feePercent}% of your bid after our ${state.config.feePercent}% fee.` }));
           form.addEventListener('submit', async (e) => {
             e.preventDefault();
             if (!requireLogin()) return;
@@ -356,7 +356,7 @@
         }
       } else if (l.status === 'closed') {
         if (l.isSeller) panel.append(acceptBlock(l));
-        else if (l.isWinner) panel.append(h('div', { class: 'notice', text: `🎉 You have the lowest bid at ${money(l.winningBidCents)}. Waiting for the customer to accept and pay.` }));
+        else if (l.isWinner) panel.append(h('div', { class: 'notice', text: `🎉 You have the lowest bid at ${money(l.winningBidCents)}. Waiting for the customer to accept and pay. You’ll receive ${money(l.providerPayoutCents)} after the ${state.config.feePercent}% fee.` }));
         else panel.append(h('div', { class: 'notice warn', text: 'Bidding on this job has closed.' }));
       } else if (l.status === 'paid') {
         panel.append(l.isWinner || l.isSeller ? bookedBlock(l) : h('div', { class: 'notice', text: 'This job has been booked.' }));
@@ -389,7 +389,7 @@
     function acceptBlock(l) {
       const mode = state.config.paymentMode;
       const err = h('div', { class: 'err', role: 'alert' });
-      const btn = h('button', { class: 'btn accent block', text: `Accept and pay ${money(l.winningBidCents)}${mode === 'demo' ? ' (demo)' : ''}` });
+      const btn = h('button', { class: 'btn accent block', text: `Accept and pay ${money(l.customerTotalCents)}${mode === 'demo' ? ' (demo)' : ''}` });
       btn.addEventListener('click', async () => {
         btn.disabled = true; err.textContent = '';
         try {
@@ -406,6 +406,10 @@
       });
       return h('div', { class: 'panel' },
         h('div', { class: 'notice', text: `Bidding has closed. ${l.winnerName} offered the lowest price: ${money(l.winningBidCents)}.` }),
+        h('dl', { class: 'facts' },
+          h('div', {}, h('dt', { text: 'Winning bid' }), h('dd', { text: money(l.winningBidCents) })),
+          h('div', {}, h('dt', { text: `Service fee (${state.config.feePercent}%)` }), h('dd', { text: money(l.customerFeeCents) })),
+          h('div', {}, h('dt', { text: 'Total to pay' }), h('dd', { text: money(l.customerTotalCents) }))),
         mode === 'off' ? h('div', { class: 'notice warn', text: 'Online payment is not enabled yet.' }) : btn,
         decline,
         err, h('div', { class: 'hint', text: 'Secure card payment by Stripe. We never see your card details.' }));
@@ -414,7 +418,7 @@
     function bookedBlock(l) {
       const c = l.contact || {};
       return h('div', { class: 'panel' },
-        h('div', { class: 'notice', text: l.isSeller ? `✅ Booked and paid. ${c.name} will collect between ${when(l)}.` : `✅ The customer has paid ${money(l.winningBidCents)}. Please collect between ${when(l)}.` }),
+        h('div', { class: 'notice', text: l.isSeller ? `✅ Booked and paid. ${c.name} will collect between ${when(l)}.` : `✅ Booked for ${money(l.winningBidCents)}. You’ll receive ${money(l.providerPayoutCents)} after the ${state.config.feePercent}% fee. Please collect between ${when(l)}.` }),
         h('dl', { class: 'facts' },
           h('div', {}, h('dt', { text: l.isSeller ? 'Your provider' : 'Customer' }), h('dd', { text: c.name })),
           h('div', {}, h('dt', { text: 'Email' }), h('dd', {}, h('a', { href: `mailto:${c.email}`, text: c.email }))),

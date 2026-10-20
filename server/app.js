@@ -36,7 +36,10 @@ function createApp(opts = {}) {
     demoPayments: opts.demoPayments !== undefined ? opts.demoPayments : process.env.DEMO_PAYMENTS === '1',
     production: process.env.NODE_ENV === 'production',
     stripe: opts.stripe,
+    // Platform fee, charged once to the customer (added on top) and once to the provider (taken from their bid).
+    feePercent: Number(opts.feePercent ?? process.env.PLATFORM_FEE_PERCENT ?? 10),
   };
+  if (!(config.feePercent >= 0 && config.feePercent < 50)) throw new Error('PLATFORM_FEE_PERCENT must be between 0 and 49');
   if (!config.jwtSecret) {
     if (config.production) throw new Error('JWT_SECRET must be set in production');
     config.jwtSecret = crypto.randomBytes(32).toString('hex');
@@ -70,6 +73,12 @@ function createApp(opts = {}) {
   const q = (sql, ...p) => db.prepare(sql).all(...p);
   const one = (sql, ...p) => db.prepare(sql).get(...p);
   const run = (sql, ...p) => db.prepare(sql).run(...p);
+
+  // Money split for an accepted bid. The customer pays bid + fee; the provider is owed bid - fee.
+  function fees(bidCents) {
+    const fee = Math.round(bidCents * config.feePercent / 100);
+    return { customerFeeCents: fee, customerTotalCents: bidCents + fee, providerFeeCents: fee, providerPayoutCents: bidCents - fee, platformCents: fee * 2 };
+  }
 
   // Lowest price wins; on a tie the earlier bid wins.
   const lowestBid = (listingId) => one('SELECT user_id, amount_cents FROM bids WHERE listing_id = ? ORDER BY amount_cents ASC, id ASC LIMIT 1', listingId);
@@ -110,6 +119,11 @@ function createApp(opts = {}) {
       winningBidCents: l.winning_bid_cents,
       createdAt: l.created_at,
     };
+    if (l.winning_bid_cents != null) {
+      const f = fees(l.winning_bid_cents);
+      if (isSeller) Object.assign(out, { customerFeeCents: f.customerFeeCents, customerTotalCents: f.customerTotalCents });
+      if (isWinner) Object.assign(out, { providerFeeCents: f.providerFeeCents, providerPayoutCents: f.providerPayoutCents });
+    }
     // The full address and contact details are private until the job is booked.
     if (isSeller) out.address = l.address;
     if (l.status === 'paid' && isWinner) Object.assign(out, { address: l.address, contact: { name: customer.name, email: customer.email } });
@@ -197,6 +211,7 @@ function createApp(opts = {}) {
   app.get('/api/config', (req, res) => res.json({
     categories: CATEGORIES,
     loadSizes: LOAD_SIZES,
+    feePercent: config.feePercent,
     maxImages: MAX_IMAGES,
     paymentMode: config.stripe ? 'stripe' : config.demoPayments ? 'demo' : 'off',
   }));
@@ -338,19 +353,22 @@ function createApp(opts = {}) {
     if (l.status === 'paid') throw new HttpError(409, 'Already paid');
     if (l.status !== 'closed') throw new HttpError(409, 'This job is not waiting for payment');
     if (config.stripe) {
+      const f = fees(l.winning_bid_cents);
+      const item = (name, amount) => ({ quantity: 1, price_data: { currency: 'gbp', unit_amount: amount, product_data: { name } } });
       const session = await config.stripe.checkout.sessions.create({
         mode: 'payment',
-        line_items: [{
-          quantity: 1,
-          price_data: {
-            currency: 'gbp',
-            unit_amount: l.winning_bid_cents,
-            product_data: { name: `Waste collection: ${l.title}` },
-          },
-        }],
+        line_items: [
+          item(`Waste collection: ${l.title}`, l.winning_bid_cents),
+          ...(f.customerFeeCents ? [item(`Service fee (${config.feePercent}%)`, f.customerFeeCents)] : []),
+        ],
         customer_email: req.user.email,
         client_reference_id: String(l.id),
-        metadata: { listing_id: String(l.id) },
+        metadata: {
+          listing_id: String(l.id),
+          provider_id: String(l.winner_id),
+          provider_payout_pence: String(f.providerPayoutCents),
+          platform_fee_pence: String(f.platformCents),
+        },
         success_url: `${config.baseUrl}/#/listing/${l.id}?paid=1`,
         cancel_url: `${config.baseUrl}/#/listing/${l.id}`,
       });

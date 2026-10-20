@@ -6,6 +6,7 @@ A reverse-auction marketplace for waste removal. A customer posts a job, local p
 - **Private address** – bidders only see the town or postcode area; the full address and contact details go to the winning provider once the customer has paid
 - **Reverse bidding** – each bid must undercut the lowest by at least 50p, countdowns, bid history, anti-sniping (late bids extend bidding by 2 minutes)
 - **Accept and pay** – when bidding closes the customer accepts the lowest bid and pays by card through Stripe Checkout (or declines it); confirmed by webhook and by direct verification on return
+- **Platform fee** – 10% added to the customer's price at checkout and 10% taken from the provider's bid (set `PLATFORM_FEE_PERCENT` to change it). Each Stripe payment records the provider's payout and your fee in its metadata
 - **Accounts** – sign up / log in (bcrypt-hashed passwords, httpOnly cookie sessions)
 - **Dashboard** – providers track their bids (lowest/undercut/won), customers track their jobs
 - Prices in pounds (GBP). Search, waste-type filters and sorting; responsive, dark-mode and keyboard friendly
@@ -34,7 +35,7 @@ npm test
 
 Test card: `4242 4242 4242 4242`, any future date, any CVC.
 
-> Payments currently go to **your** Stripe account. Paying providers directly (or taking a platform fee) needs Stripe Connect, plus decisions about KYC and terms — not included.
+> Payments go to **your** Stripe account. You then owe each provider their bid minus the fee (shown on the payment in Stripe as `provider_payout_pence`). Paying providers automatically (or taking a platform fee) needs Stripe Connect, plus decisions about KYC and terms — not included.
 
 ## Deploy
 
