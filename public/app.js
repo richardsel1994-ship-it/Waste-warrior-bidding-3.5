@@ -202,7 +202,8 @@
       err,
       h('button', { class: 'btn block', type: 'submit', text: reg ? 'Sign up' : 'Log in' }),
       h('p', { class: 'muted' }, reg ? 'Already a member? ' : 'New here? ',
-        h('a', { href: reg ? '#/login' : '#/register', text: reg ? 'Log in' : 'Create an account' })));
+        h('a', { href: reg ? '#/login' : '#/register', text: reg ? 'Log in' : 'Create an account' })),
+      !reg && h('p', { class: 'muted' }, h('a', { href: '#/forgot-password', text: 'Forgot your password?' })));
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
       err.textContent = '';
@@ -221,6 +222,45 @@
     $main.replaceChildren(f);
     f.querySelector('input').focus();
   }
+
+  function recoveryView(mode, token = '') {
+    const resetting = mode === 'reset';
+    const err = h('div', { class: 'err', role: 'alert' });
+    const f = h('form', { class: 'panel narrow', novalidate: true },
+      h('h2', { text: resetting ? 'Choose a new password' : 'Recover your password' }),
+      resetting
+        ? [
+          h('input', { type: 'hidden', name: 'token', value: token }),
+          h('label', {}, 'New password', h('input', { name: 'password', type: 'password', autocomplete: 'new-password', required: true, minlength: 8 }),
+            h('span', { class: 'hint', text: 'At least 8 characters' })),
+        ]
+        : h('label', {}, 'Email', h('input', { name: 'email', type: 'email', autocomplete: 'email', required: true })),
+      err,
+      h('button', { class: 'btn block', type: 'submit', text: resetting ? 'Set new password' : 'Email reset link' }),
+      h('p', { class: 'muted' }, h('a', { href: '#/login', text: 'Back to log in' })));
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      const btn = f.querySelector('button[type=submit]');
+      btn.disabled = true;
+      try {
+        const body = Object.fromEntries(new FormData(f));
+        const result = await api('POST', resetting ? '/api/auth/reset-password' : '/api/auth/forgot-password', body);
+        if (resetting) {
+          toast('Password updated. You can now log in.');
+          location.hash = '#/login';
+        } else {
+          f.replaceChildren(
+            h('h2', { text: 'Check your email' }),
+            h('p', { class: 'muted', text: result.message }),
+            h('p', { class: 'muted' }, h('a', { href: '#/login', text: 'Back to log in' })));
+        }
+      } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+    });
+    $main.replaceChildren(f);
+    f.querySelector('input:not([type=hidden])').focus();
+  }
+
   function sessionStorageGet(k) { try { return sessionStorage.getItem(k); } catch { return null; } }
   function sessionStorageSet(k, v) { try { sessionStorage.setItem(k, v); } catch { /* ignore */ } }
 
@@ -493,6 +533,8 @@
     if (path === '/' || path === '') return viewHome();
     if (path === '/login') return state.user ? (location.hash = '#/') : authView('login');
     if (path === '/register') return state.user ? (location.hash = '#/') : authView('register');
+    if (path === '/forgot-password') return recoveryView('forgot');
+    if (path === '/reset-password') return recoveryView('reset', query.get('token') || '');
     if (path === '/post') return viewPost();
     if (path === '/dashboard') return viewDashboard();
     const m = path.match(/^\/listing\/(\d+)$/);

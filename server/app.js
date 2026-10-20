@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 const { openDb, tx } = require('./db');
 
 const CATEGORIES = ['Household', 'Garden', 'Furniture', 'Appliances', 'Building rubble', 'Mixed recycling', 'Commercial'];
@@ -33,6 +34,15 @@ function createApp(opts = {}) {
     jwtSecret: opts.jwtSecret || process.env.JWT_SECRET,
     stripeKey: opts.stripeKey !== undefined ? opts.stripeKey : process.env.STRIPE_SECRET_KEY,
     stripeWebhookSecret: opts.stripeWebhookSecret || process.env.STRIPE_WEBHOOK_SECRET,
+    mailFrom: opts.mailFrom || process.env.SMTP_FROM || process.env.SMTP_USER,
+    mailer: opts.mailer !== undefined ? opts.mailer : (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS
+      ? nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: Number(process.env.SMTP_PORT || 587) === 465,
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      })
+      : null),
     demoPayments: opts.demoPayments !== undefined ? opts.demoPayments : process.env.DEMO_PAYMENTS === '1',
     production: process.env.NODE_ENV === 'production',
     stripe: opts.stripe,
@@ -202,6 +212,48 @@ function createApp(opts = {}) {
     if (!ok) throw new HttpError(401, 'Wrong email or password');
     setSession(res, u.id);
     res.json({ user: { id: u.id, email: u.email, name: u.name } });
+  }));
+
+  app.post('/api/auth/forgot-password', authLimiter, wrap(async (req, res) => {
+    if (!config.mailer || !config.mailFrom) throw new HttpError(503, 'Password recovery email is not configured. Please contact support.');
+    const email = String(req.body && req.body.email || '').trim().toLowerCase();
+    const user = one('SELECT id FROM users WHERE email = ?', email);
+    if (user) {
+      const token = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      run('DELETE FROM password_resets WHERE user_id = ?', user.id);
+      run('INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)', user.id, tokenHash, now() + 60 * 60_000);
+      try {
+        await config.mailer.sendMail({
+          from: config.mailFrom,
+          to: email,
+          subject: 'Reset your Waste Warrior Bidding password',
+          text: `Use this link to choose a new password. It expires in one hour:\n\n${config.baseUrl}/#/reset-password?token=${token}\n\nIf you did not request this, ignore this email.`,
+        });
+      } catch (error) {
+        run('DELETE FROM password_resets WHERE user_id = ?', user.id);
+        console.error('Password reset email failed:', error);
+      }
+    }
+    res.json({ message: 'If an account exists for that email, password reset instructions will be sent.' });
+  }));
+
+  app.post('/api/auth/reset-password', authLimiter, wrap(async (req, res) => {
+    const token = String(req.body && req.body.token || '');
+    const password = req.body && req.body.password;
+    if (!/^[a-f\d]{64}$/i.test(token)) throw new HttpError(400, 'This reset link is invalid or expired. Request a new one.');
+    if (typeof password !== 'string' || password.length < 8 || password.length > 100) throw new HttpError(400, 'Password must be 8-100 characters');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const reset = one('SELECT user_id FROM password_resets WHERE token_hash = ? AND expires_at > ?', tokenHash, now());
+    if (!reset) throw new HttpError(400, 'This reset link is invalid or expired. Request a new one.');
+    const passwordHash = await bcrypt.hash(password, 10);
+    tx(db, () => {
+      const current = one('SELECT user_id FROM password_resets WHERE token_hash = ? AND expires_at > ?', tokenHash, now());
+      if (!current) throw new HttpError(400, 'This reset link is invalid or expired. Request a new one.');
+      run('UPDATE users SET password_hash = ? WHERE id = ?', passwordHash, current.user_id);
+      run('DELETE FROM password_resets WHERE user_id = ?', current.user_id);
+    });
+    res.json({ ok: true });
   }));
 
   app.post('/api/auth/logout', (req, res) => { res.clearCookie('token'); res.json({ ok: true }); });

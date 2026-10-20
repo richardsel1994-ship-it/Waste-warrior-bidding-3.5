@@ -10,6 +10,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
 let app, server, base, dir;
 const stripeCalls = [];
+const recoveryEmails = [];
 const fakeStripe = {
   checkout: {
     sessions: {
@@ -22,7 +23,7 @@ const fakeStripe = {
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-'));
-  app = createApp({ dataDir: dir, jwtSecret: 'test', stripe: fakeStripe });
+  app = createApp({ dataDir: dir, jwtSecret: 'test', stripe: fakeStripe, mailFrom: 'support@example.com', mailer: { sendMail: async (message) => recoveryEmails.push(message) } });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://localhost:${server.address().port}`;
 });
@@ -64,6 +65,26 @@ test('auth: register, duplicate, login, bad password', async () => {
   assert.equal((await api('POST', '/api/auth/login', { body: { email: 'alice@x.com', password: 'nope' } })).status, 401);
   assert.equal((await api('POST', '/api/auth/login', { body: { email: 'alice@x.com', password: 'password123' } })).status, 200);
   assert.equal((await api('POST', '/api/auth/register', { body: { email: 'bad', name: 'x', password: 'short' } })).status, 400);
+});
+
+test('password recovery sends a one-time reset link and changes the password', async () => {
+  await register('recover');
+  recoveryEmails.length = 0;
+  const unknown = await api('POST', '/api/auth/forgot-password', { body: { email: 'missing@x.com' } });
+  assert.equal(unknown.status, 200);
+  assert.equal(recoveryEmails.length, 0);
+
+  const requested = await api('POST', '/api/auth/forgot-password', { body: { email: 'recover@x.com' } });
+  assert.equal(requested.status, 200);
+  assert.match(requested.json.message, /If an account exists/);
+  assert.equal(recoveryEmails.length, 1);
+  assert.equal(recoveryEmails[0].to, 'recover@x.com');
+  const token = recoveryEmails[0].text.match(/#\/reset-password\?token=([a-f\d]{64})/i)[1];
+
+  assert.equal((await api('POST', '/api/auth/reset-password', { body: { token, password: 'newpassword123' } })).status, 200);
+  assert.equal((await api('POST', '/api/auth/reset-password', { body: { token, password: 'anotherpassword' } })).status, 400);
+  assert.equal((await api('POST', '/api/auth/login', { body: { email: 'recover@x.com', password: 'password123' } })).status, 401);
+  assert.equal((await api('POST', '/api/auth/login', { body: { email: 'recover@x.com', password: 'newpassword123' } })).status, 200);
 });
 
 test('listing creation needs auth, photo, and a real image', async () => {

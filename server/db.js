@@ -15,6 +15,11 @@ function openDb(dataDir) {
       password_hash TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS password_resets (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS listings (
       id INTEGER PRIMARY KEY,
       seller_id INTEGER NOT NULL REFERENCES users(id),
