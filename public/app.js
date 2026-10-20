@@ -160,6 +160,7 @@
       ['Bathroom rip-out', '£250–£400'],
       ['Garden clearance', '£400–£600'],
       ['House clearance', 'About £1,000'],
+      ['Toxic house clearance with deep clean', 'About £5,000'],
     ];
 
     $main.replaceChildren(
