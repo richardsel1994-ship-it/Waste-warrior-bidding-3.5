@@ -35,7 +35,7 @@ npm test
 
 Test card: `4242 4242 4242 4242`, any future date, any CVC.
 
-> Payments go to **your** Stripe account. You then owe each provider their bid minus the fee (shown on the payment in Stripe as `provider_payout_pence`). Paying providers automatically (or taking a platform fee) needs Stripe Connect, plus decisions about KYC and terms — not included.
+> Payments go to **your** Stripe account. You then owe each provider their bid minus the fee (shown on the payment in Stripe as `provider_payout_pence`). Paying providers automatically needs Stripe Connect, plus decisions about KYC and terms — not included.
 
 ## Deploy
 
