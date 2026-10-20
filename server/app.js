@@ -49,8 +49,13 @@ function createApp(opts = {}) {
     stripe: opts.stripe,
     // Platform fee, charged once to the customer (added on top) and once to the provider (taken from their bid).
     feePercent: Number(opts.feePercent ?? process.env.PLATFORM_FEE_PERCENT ?? 10),
+    // Waste Warrior Plus: a monthly subscription that lowers the customer's service fee.
+    plusPriceId: opts.plusPriceId !== undefined ? opts.plusPriceId : process.env.STRIPE_PLUS_PRICE_ID,
+    plusFeePercent: Number(opts.plusFeePercent ?? process.env.PLUS_FEE_PERCENT ?? 6),
+    plusPricePence: Number(opts.plusPricePence ?? process.env.PLUS_PRICE_PENCE ?? 295),
   };
   if (!(config.feePercent >= 0 && config.feePercent < 50)) throw new Error('PLATFORM_FEE_PERCENT must be between 0 and 49');
+  if (!(config.plusFeePercent >= 0 && config.plusFeePercent <= config.feePercent)) throw new Error('PLUS_FEE_PERCENT must be between 0 and PLATFORM_FEE_PERCENT');
   if (!config.jwtSecret) {
     if (config.production) throw new Error('JWT_SECRET must be set in production');
     config.jwtSecret = crypto.randomBytes(32).toString('hex');
@@ -86,10 +91,21 @@ function createApp(opts = {}) {
   const one = (sql, ...p) => db.prepare(sql).get(...p);
   const run = (sql, ...p) => db.prepare(sql).run(...p);
 
-  // Money split for an accepted bid. The customer pays bid + fee; the provider is owed bid - fee.
-  function fees(bidCents) {
-    const fee = Math.round(bidCents * config.feePercent / 100);
-    return { customerFeeCents: fee, customerTotalCents: bidCents + fee, providerFeeCents: fee, providerPayoutCents: bidCents - fee, platformCents: fee * 2 };
+  // Money split for an accepted bid. The customer pays bid + their fee; the provider is owed bid - the provider fee.
+  // Plus subscribers pay a lower customer fee; the provider fee is the same for everyone.
+  function fees(bidCents, customerPct = config.feePercent) {
+    const cFee = Math.round(bidCents * customerPct / 100);
+    const pFee = Math.round(bidCents * config.feePercent / 100);
+    return { customerFeePercent: customerPct, customerFeeCents: cFee, customerTotalCents: bidCents + cFee, providerFeeCents: pFee, providerPayoutCents: bidCents - pFee, platformCents: cFee + pFee };
+  }
+  const plusAvailable = () => Boolean((config.stripe && config.plusPriceId) || config.demoPayments);
+  function isPlus(u) {
+    return Boolean(u && ['active', 'trialing'].includes(u.plus_status) && (!u.plus_until || u.plus_until > now()));
+  }
+  // The fee a customer pays right now, or the one fixed when they started paying for this job.
+  function customerPctFor(listing, seller) {
+    if (listing.customer_fee_pct != null) return listing.customer_fee_pct;
+    return isPlus(seller) ? config.plusFeePercent : config.feePercent;
   }
 
   // Lowest price wins; on a tie the earlier bid wins.
@@ -114,7 +130,7 @@ function createApp(opts = {}) {
 
   function publicListing(l, userId) {
     const low = one('SELECT MIN(amount_cents) AS m, COUNT(*) AS n FROM bids WHERE listing_id = ?', l.id);
-    const customer = one('SELECT name, email FROM users WHERE id = ?', l.seller_id);
+    const customer = one('SELECT name, email, plus_status, plus_until FROM users WHERE id = ?', l.seller_id);
     const winner = l.winner_id ? one('SELECT name, email FROM users WHERE id = ?', l.winner_id) : null;
     const current = low.n ? low.m : l.start_price_cents;
     const isSeller = userId === l.seller_id;
@@ -132,8 +148,8 @@ function createApp(opts = {}) {
       createdAt: l.created_at,
     };
     if (l.winning_bid_cents != null) {
-      const f = fees(l.winning_bid_cents);
-      if (isSeller) Object.assign(out, { customerFeeCents: f.customerFeeCents, customerTotalCents: f.customerTotalCents });
+      const f = fees(l.winning_bid_cents, customerPctFor(l, customer));
+      if (isSeller) Object.assign(out, { customerFeePercent: f.customerFeePercent, customerFeeCents: f.customerFeeCents, customerTotalCents: f.customerTotalCents });
       if (isWinner) Object.assign(out, { providerFeeCents: f.providerFeeCents, providerPayoutCents: f.providerPayoutCents });
     }
     // The full address and contact details are private until the job is booked.
@@ -159,8 +175,10 @@ function createApp(opts = {}) {
     run(`UPDATE users SET carrier_number = ?, carrier_status = ?, carrier_name = ?, carrier_tier = ?, carrier_expires = ?, carrier_checked_at = ? WHERE id = ?`,
       r.number, r.status, r.name || '', r.tier || '', r.expiresOn || '', now(), userId);
   }
-  const USER_COLS = 'id, email, name, carrier_number, carrier_status, carrier_name, carrier_tier, carrier_expires, carrier_checked_at';
-  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u) } : null);
+  const USER_COLS = 'id, email, name, carrier_number, carrier_status, carrier_name, carrier_tier, carrier_expires, carrier_checked_at, '
+    + 'stripe_customer_id, plus_subscription_id, plus_status, plus_until, plus_cancel_at_end, plus_session_id';
+  const plusJson = (u) => ({ active: isPlus(u), status: u.plus_status || null, until: u.plus_until || null, cancelAtEnd: Boolean(u.plus_cancel_at_end) });
+  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u), plus: plusJson(u) } : null);
 
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -190,7 +208,20 @@ function createApp(opts = {}) {
   function markPaid(listingId, sessionId) {
     run("UPDATE listings SET status = 'paid' WHERE id = ? AND status = 'closed' AND stripe_session_id = ?", listingId, sessionId);
   }
-  app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  // Store a Plus subscription's state against the user it belongs to.
+  function syncSubscription(sub, userId) {
+    if (!sub) return;
+    const uid = userId || Number(sub.metadata && sub.metadata.user_id)
+      || (one('SELECT id FROM users WHERE plus_subscription_id = ?', sub.id) || {}).id;
+    if (!uid) return;
+    const periodEnd = sub.current_period_end || (sub.items && sub.items.data && sub.items.data[0] && sub.items.data[0].current_period_end) || null;
+    const customer = typeof sub.customer === 'string' ? sub.customer : (sub.customer && sub.customer.id) || '';
+    run(`UPDATE users SET plus_subscription_id = ?, plus_status = ?, plus_until = ?, plus_cancel_at_end = ?,
+           stripe_customer_id = CASE WHEN ? != '' THEN ? ELSE stripe_customer_id END WHERE id = ?`,
+      sub.id, sub.status, periodEnd ? periodEnd * 1000 : null, sub.cancel_at_period_end ? 1 : 0, customer, customer, uid);
+  }
+
+  app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), wrap(async (req, res) => {
     if (!config.stripe || !config.stripeWebhookSecret) return res.status(503).end();
     let event;
     try {
@@ -198,12 +229,19 @@ function createApp(opts = {}) {
     } catch {
       return res.status(400).send('Bad signature');
     }
-    if (event.type === 'checkout.session.completed' && event.data.object.payment_status === 'paid') {
-      const s = event.data.object;
-      markPaid(Number(s.metadata && s.metadata.listing_id), s.id);
+    const o = event.data.object;
+    if (event.type === 'checkout.session.completed') {
+      if (o.mode === 'subscription' && o.subscription) {
+        const sub = typeof o.subscription === 'string' ? await config.stripe.subscriptions.retrieve(o.subscription) : o.subscription;
+        syncSubscription(sub, Number(o.metadata && o.metadata.user_id) || Number(o.client_reference_id) || null);
+      } else if (o.payment_status === 'paid') {
+        markPaid(Number(o.metadata && o.metadata.listing_id), o.id);
+      }
+    } else if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted' || event.type === 'customer.subscription.created') {
+      syncSubscription(o);
     }
     res.json({ received: true });
-  });
+  }));
 
   app.use(express.json({ limit: '20kb' }));
   app.use(cookieParser());
@@ -223,7 +261,7 @@ function createApp(opts = {}) {
     const hash = await bcrypt.hash(password, 10);
     const r = run('INSERT INTO users (email, name, password_hash, created_at) VALUES (?, ?, ?, ?)', e, n, hash, now());
     setSession(res, Number(r.lastInsertRowid));
-    res.status(201).json({ user: { id: Number(r.lastInsertRowid), email: e, name: n, carrier: null } });
+    res.status(201).json({ user: meJson(one(`SELECT ${USER_COLS} FROM users WHERE id = ?`, Number(r.lastInsertRowid))) });
   }));
 
   app.post('/api/auth/login', authLimiter, wrap(async (req, res) => {
@@ -285,6 +323,7 @@ function createApp(opts = {}) {
     categories: CATEGORIES,
     loadSizes: LOAD_SIZES,
     feePercent: config.feePercent,
+    plus: { available: plusAvailable(), feePercent: config.plusFeePercent, pricePence: config.plusPricePence },
     maxImages: MAX_IMAGES,
     paymentMode: config.stripe ? 'stripe' : config.demoPayments ? 'demo' : 'off',
   }));
@@ -409,6 +448,60 @@ function createApp(opts = {}) {
     res.status(201).json({ ok: true });
   });
 
+  // ---------- Waste Warrior Plus subscription ----------
+  const meRow = (id) => one(`SELECT ${USER_COLS} FROM users WHERE id = ?`, id);
+
+  app.post('/api/plus/checkout', auth(true), wrap(async (req, res) => {
+    if (isPlus(req.user)) throw new HttpError(409, 'You already have Waste Warrior Plus');
+    if (config.stripe && config.plusPriceId) {
+      const session = await config.stripe.checkout.sessions.create({
+        mode: 'subscription',
+        line_items: [{ price: config.plusPriceId, quantity: 1 }],
+        ...(req.user.stripe_customer_id ? { customer: req.user.stripe_customer_id } : { customer_email: req.user.email }),
+        client_reference_id: String(req.user.id),
+        metadata: { user_id: String(req.user.id), kind: 'plus' },
+        subscription_data: { metadata: { user_id: String(req.user.id) } },
+        success_url: `${config.baseUrl}/#/plus?subscribed=1`,
+        cancel_url: `${config.baseUrl}/#/plus`,
+      });
+      run('UPDATE users SET plus_session_id = ? WHERE id = ?', session.id, req.user.id);
+      return res.json({ url: session.url });
+    }
+    if (config.demoPayments) {
+      run("UPDATE users SET plus_status = 'active', plus_until = ?, plus_cancel_at_end = 0, plus_subscription_id = 'demo' WHERE id = ?", now() + 30 * DAY_MS, req.user.id);
+      return res.json({ demo: true, user: meJson(meRow(req.user.id)) });
+    }
+    throw new HttpError(503, 'Subscriptions are not available yet');
+  }));
+
+  // Called when the customer returns from Stripe, so Plus starts even before the webhook arrives.
+  app.post('/api/plus/verify', auth(true), wrap(async (req, res) => {
+    const u = req.user;
+    if (config.stripe && u.plus_session_id && !isPlus(u)) {
+      const s = await config.stripe.checkout.sessions.retrieve(u.plus_session_id);
+      if (s.status === 'complete' && s.subscription) {
+        const sub = typeof s.subscription === 'string' ? await config.stripe.subscriptions.retrieve(s.subscription) : s.subscription;
+        syncSubscription(sub, u.id);
+      }
+    }
+    res.json({ user: meJson(meRow(u.id)) });
+  }));
+
+  // Cancel at the end of the paid month, or undo that.
+  async function setCancel(req, res, cancel) {
+    const u = req.user;
+    if (!u.plus_subscription_id || !isPlus(u)) throw new HttpError(409, 'You don’t have an active Plus subscription');
+    if (u.plus_subscription_id === 'demo' || !config.stripe) {
+      run('UPDATE users SET plus_cancel_at_end = ? WHERE id = ?', cancel ? 1 : 0, u.id);
+    } else {
+      const sub = await config.stripe.subscriptions.update(u.plus_subscription_id, { cancel_at_period_end: cancel });
+      syncSubscription(sub, u.id);
+    }
+    res.json({ user: meJson(meRow(u.id)) });
+  }
+  app.post('/api/plus/cancel', auth(true), wrap((req, res) => setCancel(req, res, true)));
+  app.post('/api/plus/resume', auth(true), wrap((req, res) => setCancel(req, res, false)));
+
   // ---------- haulers and waste carrier checks ----------
   const checkLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, legacyHeaders: false });
 
@@ -475,14 +568,16 @@ function createApp(opts = {}) {
     const l = customerJob(req);
     if (l.status === 'paid') throw new HttpError(409, 'Already paid');
     if (l.status !== 'closed') throw new HttpError(409, 'This job is not waiting for payment');
+    const seller = one('SELECT plus_status, plus_until FROM users WHERE id = ?', l.seller_id);
+    const pct = isPlus(seller) ? config.plusFeePercent : config.feePercent;
     if (config.stripe) {
-      const f = fees(l.winning_bid_cents);
+      const f = fees(l.winning_bid_cents, pct);
       const item = (name, amount) => ({ quantity: 1, price_data: { currency: 'gbp', unit_amount: amount, product_data: { name } } });
       const session = await config.stripe.checkout.sessions.create({
         mode: 'payment',
         line_items: [
           item(`Waste collection: ${l.title}`, l.winning_bid_cents),
-          ...(f.customerFeeCents ? [item(`Service fee (${config.feePercent}%)`, f.customerFeeCents)] : []),
+          ...(f.customerFeeCents ? [item(`Service fee (${pct}%${pct !== config.feePercent ? ', Plus member' : ''})`, f.customerFeeCents)] : []),
         ],
         customer_email: req.user.email,
         client_reference_id: String(l.id),
@@ -495,11 +590,11 @@ function createApp(opts = {}) {
         success_url: `${config.baseUrl}/#/listing/${l.id}?paid=1`,
         cancel_url: `${config.baseUrl}/#/listing/${l.id}`,
       });
-      run('UPDATE listings SET stripe_session_id = ? WHERE id = ?', session.id, l.id);
+      run('UPDATE listings SET stripe_session_id = ?, customer_fee_pct = ? WHERE id = ?', session.id, pct, l.id);
       return res.json({ url: session.url });
     }
     if (config.demoPayments) {
-      run("UPDATE listings SET status = 'paid', stripe_session_id = 'demo' WHERE id = ?", l.id);
+      run("UPDATE listings SET status = 'paid', stripe_session_id = 'demo', customer_fee_pct = ? WHERE id = ?", pct, l.id);
       return res.json({ demo: true });
     }
     throw new HttpError(503, 'Payments are not configured yet');

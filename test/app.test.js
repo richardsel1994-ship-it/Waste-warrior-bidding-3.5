@@ -307,3 +307,83 @@ test('haulers: verify a number, show it on bids and the haulers list', async () 
     srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+// ---------- Waste Warrior Plus ----------
+test('plus: subscribers pay the lower customer fee; providers still pay the standard fee', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-p-'));
+  const calls = [];
+  const subs = {};
+  const stripe = {
+    checkout: {
+      sessions: {
+        create: async (p) => { calls.push(p); return { id: `cs_${calls.length}`, url: `https://checkout.stripe.com/pay/cs_${calls.length}` }; },
+        retrieve: async (id) => (id === 'cs_1'
+          ? { id, status: 'complete', subscription: 'sub_1' }
+          : { id, payment_status: 'paid' }),
+      },
+    },
+    subscriptions: {
+      retrieve: async (id) => subs[id],
+      update: async (id, p) => Object.assign(subs[id], { cancel_at_period_end: p.cancel_at_period_end }),
+    },
+    webhooks: { constructEvent: () => { throw new Error('bad'); } },
+  };
+  const a = createApp({ dataDir: d, jwtSecret: 't', stripe, plusPriceId: 'price_plus' });
+  const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
+  const b = `http://localhost:${srv.address().port}`;
+  const call = async (method, url, body, cookie) => {
+    const res = await fetch(b + url, { method, headers: { ...(cookie ? { cookie } : {}), ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, json: await res.json(), cookie: (res.headers.get('set-cookie') || '').split(';')[0] };
+  };
+  try {
+    const cfg = await call('GET', '/api/config');
+    assert.deepEqual(cfg.json.plus, { available: true, feePercent: 6, pricePence: 295 });
+
+    const cust = await call('POST', '/api/auth/register', { email: 'p@x.com', name: 'Pat Plus', password: 'password123' });
+    const haul = await call('POST', '/api/auth/register', { email: 'q@x.com', name: 'Quinn Hauler', password: 'password123' });
+    assert.equal(cust.json.user.plus.active, false);
+
+    const co = await call('POST', '/api/plus/checkout', null, cust.cookie);
+    assert.equal(co.status, 200);
+    assert.equal(calls[0].mode, 'subscription');
+    assert.deepEqual(calls[0].line_items, [{ price: 'price_plus', quantity: 1 }]);
+    const uid = cust.json.user.id;
+    assert.equal(calls[0].metadata.user_id, String(uid));
+
+    subs.sub_1 = { id: 'sub_1', status: 'active', customer: 'cus_1', cancel_at_period_end: false, metadata: { user_id: String(uid) },
+      items: { data: [{ current_period_end: Math.floor(Date.now() / 1000) + 30 * 86400 }] } };
+    const v = await call('POST', '/api/plus/verify', null, cust.cookie);
+    assert.equal(v.json.user.plus.active, true);
+    assert.equal((await call('POST', '/api/plus/checkout', null, cust.cookie)).status, 409);
+
+    // A job paid for by a Plus member: 6% added for the customer, 10% taken from the provider.
+    const created = await fetch(b + '/api/listings', { method: 'POST', headers: { cookie: cust.cookie }, body: listingForm() }).then((r) => r.json());
+    await call('POST', `/api/listings/${created.id}/bids`, { amount: 100 }, haul.cookie);
+    a.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, created.id);
+    const job = await call('GET', `/api/listings/${created.id}`, null, cust.cookie);
+    assert.equal(job.json.listing.customerFeePercent, 6);
+    assert.equal(job.json.listing.customerTotalCents, 10600);
+    const pay = await call('POST', `/api/listings/${created.id}/checkout`, null, cust.cookie);
+    assert.equal(pay.status, 200);
+    const jobCall = calls[calls.length - 1];
+    assert.equal(jobCall.line_items[1].price_data.unit_amount, 600);
+    assert.match(jobCall.line_items[1].price_data.product_data.name, /6%/);
+    assert.equal(jobCall.metadata.provider_payout_pence, '9000');
+    assert.equal(jobCall.metadata.platform_fee_pence, '1600');
+    const won = await call('GET', `/api/listings/${created.id}`, null, haul.cookie);
+    assert.equal(won.json.listing.providerPayoutCents, 9000);
+
+    // Cancelling keeps Plus until the end of the month; resuming undoes it.
+    const c1 = await call('POST', '/api/plus/cancel', null, cust.cookie);
+    assert.equal(c1.json.user.plus.active, true);
+    assert.equal(c1.json.user.plus.cancelAtEnd, true);
+    assert.equal((await call('POST', '/api/plus/resume', null, cust.cookie)).json.user.plus.cancelAtEnd, false);
+
+    // Once Stripe ends the subscription the standard fee applies again.
+    subs.sub_1.status = 'canceled';
+    a.db.prepare("UPDATE users SET plus_status = 'canceled' WHERE id = ?").run(uid);
+    assert.equal((await call('GET', '/api/me', null, cust.cookie)).json.user.plus.active, false);
+  } finally {
+    srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
+  }
+});

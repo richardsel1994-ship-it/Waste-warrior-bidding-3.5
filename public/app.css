@@ -228,3 +228,13 @@ main > * { animation: rise .35s ease both; }
 .bids .bidder { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }
 @media (max-width: 520px) { .hauler { flex-wrap: wrap; } }
+
+/* Waste Warrior Plus */
+.plus-hero { margin: 24px 0 8px; border-radius: 22px; padding: 44px 32px; color: #fff; display: grid; gap: 14px; justify-items: start;
+  background: radial-gradient(700px 300px at 100% 0, rgba(242,169,0,.45), transparent), linear-gradient(135deg, #0f7a45, #08301f); box-shadow: var(--shadow); }
+.plus-hero h1 { font-size: clamp(2rem, 5vw, 3rem); margin: 0; }
+.plus-hero p { margin: 0; max-width: 52ch; font-size: 1.08rem; opacity: .92; }
+.plus-hero .eyebrow { margin: 0; }
+.plus-hero .notice { color: var(--text); }
+.plus-status { display: grid; gap: 10px; justify-items: start; }
+@media (max-width: 820px) { .plus-hero { padding: 30px 20px; } }

@@ -64,6 +64,8 @@ function migrate(db) {
     access_notes: "TEXT NOT NULL DEFAULT ''",
     collect_from: "TEXT NOT NULL DEFAULT ''",
     collect_by: "TEXT NOT NULL DEFAULT ''",
+    // The customer's service fee percentage, fixed when they start paying
+    customer_fee_pct: 'REAL',
   };
   for (const [name, type] of Object.entries(add)) {
     if (!cols.includes(name)) db.exec(`ALTER TABLE listings ADD COLUMN ${name} ${type}`);
@@ -79,6 +81,13 @@ function migrate(db) {
     carrier_tier: "TEXT NOT NULL DEFAULT ''",
     carrier_expires: "TEXT NOT NULL DEFAULT ''",
     carrier_checked_at: 'INTEGER',
+    // Waste Warrior Plus subscription (customers pay a lower service fee)
+    stripe_customer_id: "TEXT NOT NULL DEFAULT ''",
+    plus_subscription_id: "TEXT NOT NULL DEFAULT ''",
+    plus_status: "TEXT NOT NULL DEFAULT ''",
+    plus_until: 'INTEGER',
+    plus_cancel_at_end: 'INTEGER NOT NULL DEFAULT 0',
+    plus_session_id: "TEXT NOT NULL DEFAULT ''",
   };
   for (const [name, type] of Object.entries(addUser)) {
     if (!userCols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);

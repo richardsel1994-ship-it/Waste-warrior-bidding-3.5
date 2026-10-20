@@ -1,7 +1,9 @@
 (() => {
   const $main = document.getElementById('main');
   const $nav = document.getElementById('nav');
-  const state = { user: null, config: { categories: [], loadSizes: [], maxImages: 4, paymentMode: 'off', feePercent: 10 } };
+  const state = { user: null, config: { categories: [], loadSizes: [], maxImages: 4, paymentMode: 'off', feePercent: 10, plus: { available: false, feePercent: 6, pricePence: 295 } } };
+  const isPlus = () => Boolean(state.user && state.user.plus && state.user.plus.active);
+  const myFee = () => (isPlus() ? state.config.plus.feePercent : state.config.feePercent);
   let pollTimer = null;
   let tickTimer = null;
 
@@ -71,6 +73,7 @@
     $nav.replaceChildren(
       link('#/', 'Browse'),
       link('#/haulers', 'Haulers'),
+      link('#/plus', isPlus() ? 'Plus ✔' : 'Plus'),
       ...(state.user ? [
         link('#/dashboard', 'My activity'),
         link('#/post', 'Post a job', 'nav-cta'),
@@ -327,7 +330,8 @@
         h('label', {}, 'Collect from', h('input', { name: 'collectFrom', type: 'date', min: isoDay(0), value: isoDay(3), required: true })),
         h('label', {}, 'Collect by', h('input', { name: 'collectBy', type: 'date', min: isoDay(0), value: isoDay(10), required: true })),
         h('label', {}, 'Maximum budget (£)', h('input', { name: 'startPrice', type: 'number', min: 1, step: '0.01', required: true }),
-          h('span', { class: 'hint', text: `Bids start here and go down. A ${state.config.feePercent}% service fee is added when you pay.` })),
+          h('span', { class: 'hint' }, `Bids start here and go down. A ${myFee()}% service fee is added when you pay.`,
+            !isPlus() && state.config.plus.available ? [' ', h('a', { href: '#/plus', text: `Pay ${state.config.plus.feePercent}% with Plus` })] : null)),
         h('label', {}, 'Bidding open for', h('select', { name: 'durationHours' },
           ...Array.from({ length: 23 }, (_, i) => i + 1).map((hours) => h('option', { value: hours, text: `${hours} ${hours === 1 ? 'hour' : 'hours'}`, selected: hours === 3 })))),
         h('label', {}, 'Town or postcode area', h('input', { name: 'location', maxlength: 100, required: true, placeholder: 'e.g. Leeds LS6' }),
@@ -468,8 +472,10 @@
         h('div', { class: 'notice', text: `Bidding has closed. ${l.winnerName} offered the lowest price: ${money(l.winningBidCents)}.` }),
         h('dl', { class: 'facts' },
           h('div', {}, h('dt', { text: 'Winning bid' }), h('dd', { text: money(l.winningBidCents) })),
-          h('div', {}, h('dt', { text: `Service fee (${state.config.feePercent}%)` }), h('dd', { text: money(l.customerFeeCents) })),
+          h('div', {}, h('dt', { text: `Service fee (${l.customerFeePercent ?? state.config.feePercent}%${l.customerFeePercent < state.config.feePercent ? ', Plus' : ''})` }), h('dd', { text: money(l.customerFeeCents) })),
           h('div', {}, h('dt', { text: 'Total to pay' }), h('dd', { text: money(l.customerTotalCents) }))),
+        !isPlus() && state.config.plus.available && h('p', { class: 'hint' }, `Plus members pay a ${state.config.plus.feePercent}% fee instead of ${state.config.feePercent}%. `,
+          h('a', { href: '#/plus', text: 'See Plus' })),
         mode === 'off' ? h('div', { class: 'notice warn', text: 'Online payment is not enabled yet.' }) : btn,
         decline,
         err, h('div', { class: 'hint', text: 'Secure card payment by Stripe. We never see your card details.' }));
@@ -504,6 +510,82 @@
       if (document.hidden || document.activeElement?.tagName === 'INPUT') return;
       try { await fetchData(); draw(); } catch { /* ignore */ }
     }, 6000);
+  }
+
+  // ---------- Waste Warrior Plus ----------
+  async function viewPlus(query) {
+    document.title = 'Plus · Waste Warrior';
+    const p = state.config.plus;
+    const std = state.config.feePercent;
+    const price = money(p.pricePence);
+    if (query.get('subscribed') && state.user) {
+      try {
+        const { user } = await api('POST', '/api/plus/verify');
+        state.user = user; renderNav();
+        if (isPlus()) toast('Welcome to Plus! Your lower fee is now active.');
+      } catch { /* the webhook will catch up */ }
+      history.replaceState(null, '', '#/plus');
+    }
+    const err = h('div', { class: 'err', role: 'alert' });
+    const example = 20000; // £200 job
+    const save = Math.round(example * (std - p.feePercent) / 100);
+
+    function action() {
+      if (!p.available) return h('div', { class: 'notice warn', text: 'Plus isn’t available just yet. Check back soon.' });
+      if (!state.user) return h('a', { class: 'btn accent lg', href: '#/register', text: `Sign up and get Plus` });
+      const pl = state.user.plus;
+      if (pl && pl.active) {
+        const until = pl.until ? new Date(pl.until).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+        const btn = h('button', { class: 'btn secondary', type: 'button', text: pl.cancelAtEnd ? 'Keep my Plus' : 'Cancel Plus' });
+        btn.addEventListener('click', async () => {
+          if (!pl.cancelAtEnd && !confirm(`Cancel Plus? You’ll keep the ${p.feePercent}% fee until ${until || 'the end of this month'}.`)) return;
+          btn.disabled = true; err.textContent = '';
+          try {
+            const { user } = await api('POST', pl.cancelAtEnd ? '/api/plus/resume' : '/api/plus/cancel');
+            state.user = user; renderNav(); draw();
+            toast(pl.cancelAtEnd ? 'Plus will carry on renewing' : 'Plus cancelled. It stays active until the end of your month.');
+          } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+        });
+        return h('div', { class: 'plus-status' },
+          h('div', { class: 'notice', text: pl.cancelAtEnd
+            ? `✔ You’re on Plus until ${until}. It won’t renew.`
+            : `✔ You’re on Plus. You pay a ${p.feePercent}% fee on every job.${until ? ` Next payment ${until}.` : ''}` }),
+          btn);
+      }
+      const btn = h('button', { class: 'btn accent lg', type: 'button', text: `Get Plus for ${price}/month` });
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; err.textContent = '';
+        try {
+          const r = await api('POST', '/api/plus/checkout');
+          if (r.url) location.href = r.url;
+          else { state.user = r.user; renderNav(); draw(); toast('Plus activated (demo)'); }
+        } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+      });
+      return btn;
+    }
+
+    function draw() {
+      $main.replaceChildren(
+        h('section', { class: 'plus-hero' },
+          h('span', { class: 'eyebrow', text: 'Waste Warrior Plus' }),
+          h('h1', {}, `Pay a ${p.feePercent}% fee, not ${std}%.`),
+          h('p', { text: `For ${price} a month, the service fee on every job you post drops from ${std}% to ${p.feePercent}%. Cancel any time.` }),
+          action(), err),
+        h('section', { class: 'block' },
+          h('h2', { text: 'How much you save' }),
+          h('table', { class: 'estimates' },
+            h('thead', {}, h('tr', {}, h('th', { scope: 'col', text: 'A £200 job' }), h('th', { scope: 'col', text: 'Service fee' }), h('th', { scope: 'col', text: 'You pay' }))),
+            h('tbody', {},
+              h('tr', {}, h('th', { scope: 'row', text: 'Standard' }), h('td', { text: `${money(example * std / 100)} (${std}%)` }), h('td', { text: money(example * (100 + std) / 100) })),
+              h('tr', {}, h('th', { scope: 'row', text: 'With Plus' }), h('td', { text: `${money(example * p.feePercent / 100)} (${p.feePercent}%)` }), h('td', { text: money(example * (100 + p.feePercent) / 100) })))),
+          h('p', { class: 'hint', text: `You save ${money(save)} on a £200 job, so Plus pays for itself once you spend about ${money(Math.ceil(p.pricePence * 100 / (std - p.feePercent) / 100) * 100)} a month on jobs.` })),
+        h('section', { class: 'block' },
+          h('div', { class: 'features' },
+            h('div', { class: 'feature' }, h('div', { class: 'ico', text: '💷' }), h('h3', { text: 'Lower fee on every job' }), h('p', { class: 'muted', text: `The ${p.feePercent}% fee applies to every job you pay for while you’re a member.` })),
+            h('div', { class: 'feature' }, h('div', { class: 'ico', text: '🔁' }), h('h3', { text: 'Monthly, no contract' }), h('p', { class: 'muted', text: `${price} a month by card. Cancel any time and keep Plus until the end of the month you’ve paid for.` })),
+            h('div', { class: 'feature' }, h('div', { class: 'ico', text: '🔒' }), h('h3', { text: 'Paid securely' }), h('p', { class: 'muted', text: 'Subscriptions are handled by Stripe. We never see your card details.' })))));
+    }
+    draw();
   }
 
   // ---------- haulers & waste carrier checks ----------
@@ -688,6 +770,7 @@
     if (path === '/post') return viewPost();
     if (path === '/dashboard') return viewDashboard();
     if (path === '/haulers') return viewHaulers();
+    if (path === '/plus') return viewPlus(query);
     const m = path.match(/^\/listing\/(\d+)$/);
     if (m) return viewListing(m[1], query);
     $main.replaceChildren(h('div', { class: 'empty' }, h('h2', { text: 'Page not found' }), h('a', { class: 'btn', href: '#/', text: 'Go home' })));
