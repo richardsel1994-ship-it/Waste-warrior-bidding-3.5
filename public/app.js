@@ -78,6 +78,7 @@
       link('#/plus', 'Plans'),
       ...(state.user ? [
         link('#/dashboard', 'My activity'),
+        ...(state.user.admin ? [link('#/admin', 'Admin')] : []),
         link('#/post', 'Post a job', 'nav-cta'),
         h('button', { class: 'link', text: `Log out (${state.user.name.split(' ')[0]})`, onclick: logout }),
       ] : [
@@ -430,6 +431,8 @@
         panel.append(l.isWinner || l.isSeller ? bookedBlock(l) : h('div', { class: 'notice', text: 'This job has been booked.' }));
       } else if (l.status === 'cancelled') {
         panel.append(h('div', { class: 'notice warn', text: l.isSeller ? 'You declined the lowest bid. Post the job again any time.' : 'The customer didn’t go ahead with this job.' }));
+      } else if (l.status === 'removed') {
+        panel.append(h('div', { class: 'notice warn', text: 'This job has been removed from the site.' }));
       } else panel.append(h('div', { class: 'notice warn', text: 'Bidding closed with no bids.' }));
 
       panel.append(h('div', {}, h('strong', { text: 'Bids (lowest first)' }),
@@ -601,6 +604,80 @@
     draw();
   }
 
+  // ---------- admin ----------
+  async function viewAdmin() {
+    if (!requireLogin()) return;
+    if (!state.user.admin) { $main.replaceChildren(h('div', { class: 'empty' }, h('h2', { text: 'Admins only' }), h('a', { class: 'btn', href: '#/', text: 'Go home' }))); return; }
+    document.title = 'Admin · Waste Warrior';
+    let tab = 'overview';
+    const tabs = h('div', { class: 'tabs' });
+    const body = h('div', {}, h('div', { class: 'loading', text: 'Loading…' }));
+    const fmt = (ms) => new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    const STATUS = { open: 'Taking bids', closed: 'Awaiting payment', paid: 'Paid', expired: 'No bids', cancelled: 'Declined', removed: 'Removed' };
+
+    async function overview() {
+      const o = await api('GET', '/api/admin/overview');
+      const tile = (v, t) => h('div', { class: 'stat' }, h('b', { text: String(v) }), h('span', { text: t }));
+      return [
+        h('div', { class: 'stats admin-stats' },
+          tile(money(o.feesEarnedCents), 'Fees earned'),
+          tile(money(o.monthlySubscriptionCents), 'Subscriptions / month'),
+          tile(o.paidJobs, 'Paid jobs'),
+          tile(money(o.jobValueCents), 'Value of paid jobs'),
+          tile(money(o.owedToHaulersCents), 'Owed to haulers'),
+          tile(o.users, 'Members'),
+          tile(`${o.subscribers.plus} / ${o.subscribers.pro}`, 'Plus / Hauler Pro'),
+          tile(o.haulersVerified, 'Verified haulers')),
+        h('p', { class: 'hint', text: `Jobs: ${Object.entries(o.jobs).map(([k, n]) => `${STATUS[k] || k} ${n}`).join(' · ') || 'none yet'}. “Owed to haulers” is what you need to pay out from your Stripe balance for paid jobs.` })];
+    }
+
+    async function jobs() {
+      const { jobs: list } = await api('GET', '/api/admin/jobs');
+      if (!list.length) return [h('div', { class: 'empty' }, h('p', { text: 'No jobs yet.' }))];
+      return [h('div', { class: 'table-wrap' }, h('table', { class: 'estimates admin-table' },
+        h('thead', {}, h('tr', {}, ...['Job', 'Customer', 'Status', 'Bids', 'Price', 'Fees', 'Hauler', ''].map((t) => h('th', { scope: 'col', text: t })))),
+        h('tbody', {}, ...list.map((j) => {
+          const rm = j.status !== 'paid' && j.status !== 'removed' && h('button', { class: 'btn secondary sm', type: 'button', text: 'Remove' });
+          if (rm) rm.addEventListener('click', async () => {
+            if (!confirm(`Remove “${j.title}” from the site?`)) return;
+            rm.disabled = true;
+            try { await api('POST', `/api/admin/jobs/${j.id}/remove`); toast('Job removed'); draw(); } catch (ex) { toast(ex.message, true); rm.disabled = false; }
+          });
+          return h('tr', {},
+            h('th', { scope: 'row' }, h('a', { href: `#/listing/${j.id}`, text: j.title }), h('div', { class: 'hint', text: `${j.location} · ${fmt(j.createdAt)}` })),
+            h('td', {}, j.customer.name, h('div', { class: 'hint', text: j.customer.email })),
+            h('td', { text: STATUS[j.status] || j.status }),
+            h('td', { text: String(j.bids) }),
+            h('td', { text: money(j.winningBidCents ?? j.budgetCents) }),
+            h('td', { text: j.feesCents != null ? money(j.feesCents) : '—' }),
+            h('td', {}, j.hauler ? [j.hauler.name, h('div', { class: 'hint', text: j.hauler.email })] : '—'),
+            h('td', {}, rm || ''));
+        }))))];
+    }
+
+    async function users() {
+      const { users: list } = await api('GET', '/api/admin/users');
+      return [h('div', { class: 'table-wrap' }, h('table', { class: 'estimates admin-table' },
+        h('thead', {}, h('tr', {}, ...['Member', 'Joined', 'Plans', 'Carrier', 'Posted', 'Bids', 'Won'].map((t) => h('th', { scope: 'col', text: t })))),
+        h('tbody', {}, ...list.map((u) => h('tr', {},
+          h('th', { scope: 'row' }, u.name, u.admin ? ' (admin)' : '', h('div', { class: 'hint', text: u.email })),
+          h('td', { text: fmt(u.createdAt) }),
+          h('td', { text: [u.plus && 'Plus', u.pro && 'Hauler Pro'].filter(Boolean).join(', ') || '—' }),
+          h('td', {}, u.carrier ? h('a', { href: u.carrier.registerUrl, target: '_blank', rel: 'noopener', text: `${u.carrier.number}${u.carrier.verified ? ' ✔' : ''}` }) : '—'),
+          h('td', { text: String(u.jobsPosted) }),
+          h('td', { text: String(u.bidsPlaced) }),
+          h('td', { text: String(u.jobsWon) }))))))];
+    }
+
+    async function draw() {
+      tabs.replaceChildren(...[['overview', 'Overview'], ['jobs', 'Jobs'], ['users', 'Members']].map(([k, t]) =>
+        h('button', { class: 'chip', 'aria-pressed': String(tab === k), text: t, onclick: () => { tab = k; draw(); } })));
+      try { body.replaceChildren(...await ({ overview, jobs, users })[tab]()); } catch (e) { body.replaceChildren(h('div', { class: 'err', text: e.message })); }
+    }
+    $main.replaceChildren(h('h1', { text: 'Admin' }), tabs, body);
+    draw();
+  }
+
   // ---------- haulers & waste carrier checks ----------
   function carrierBadge(c) {
     // Only verified haulers get a badge; everyone else shows just their name.
@@ -748,6 +825,7 @@
       paid: h('span', { class: 'pill', text: 'Booked' }),
       expired: h('span', { class: 'pill bad', text: 'No bids' }),
       cancelled: h('span', { class: 'pill bad', text: 'Declined' }),
+      removed: h('span', { class: 'pill bad', text: 'Removed' }),
     })[l.status];
     function draw() {
       const list = tab === 'bidding' ? act.bidding : act.selling;
@@ -784,6 +862,7 @@
     if (path === '/dashboard') return viewDashboard();
     if (path === '/haulers') return viewHaulers();
     if (path === '/plus') return viewPlans(query);
+    if (path === '/admin') return viewAdmin();
     const m = path.match(/^\/listing\/(\d+)$/);
     if (m) return viewListing(m[1], query);
     $main.replaceChildren(h('div', { class: 'empty' }, h('h2', { text: 'Page not found' }), h('a', { class: 'btn', href: '#/', text: 'Go home' })));

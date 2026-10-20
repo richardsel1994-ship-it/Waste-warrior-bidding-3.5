@@ -10,6 +10,7 @@ A reverse-auction marketplace for waste removal. A customer posts a job, local p
 - **Waste Warrior Plus** – a £2.95/month subscription (`#/plus`) for customers that lowers their service fee from 10% to 6%. Billed by Stripe; cancel any time and keep Plus to the end of the paid month. Set `STRIPE_PLUS_PRICE_ID` to the monthly Stripe price, and add the `customer.subscription.updated` and `customer.subscription.deleted` events to the Stripe webhook
 - **Hauler Pro** – a £4.99/month subscription for haulers that lowers the fee taken from their winning bids from 10% to 6%. Set `STRIPE_PRO_PRICE_ID`. Both plans are on the Plans page (`#/plus`), and each job's fees are fixed when the customer starts paying
 - **Haulers & waste carrier checks** – a Haulers page (`#/haulers`) where anyone can check a waste carrier number live against the Environment Agency public register, and haulers verify their own number (CBDU/CBDL) to get a “Registered carrier” badge on their bids and a place on the haulers list. Registrations are re-checked weekly
+- **Admin** – accounts listed in `ADMIN_EMAILS` get an Admin page (`#/admin`) with earnings, every job and member, and can remove unpaid jobs
 - **Accounts** – sign up / log in (bcrypt-hashed passwords, httpOnly cookie sessions)
 - **Dashboard** – providers track their bids (lowest/undercut/won), customers track their jobs
 - Prices in pounds (GBP). Search, waste-type filters and sorting; responsive, dark-mode and keyboard friendly
