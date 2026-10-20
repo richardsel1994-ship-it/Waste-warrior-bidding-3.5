@@ -600,9 +600,9 @@
 
   // ---------- haulers & waste carrier checks ----------
   function carrierBadge(c) {
-    if (!c) return h('span', { class: 'reg none', text: 'No carrier number' });
-    if (c.verified) return h('a', { class: 'reg ok', href: c.registerUrl, target: '_blank', rel: 'noopener', title: `Waste carrier ${c.number}`, text: '✔ Registered carrier' });
-    return h('span', { class: 'reg none', text: 'Not verified' });
+    // Only verified haulers get a badge; everyone else shows just their name.
+    if (c && c.verified) return h('a', { class: 'reg ok', href: c.registerUrl, target: '_blank', rel: 'noopener', title: `Waste carrier ${c.number}`, text: '✔ Registered carrier' });
+    return null;
   }
   const fmtDate = (iso) => (iso ? new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '');
   const SEARCH_URL = 'https://environment.data.gov.uk/public-register/view/search-waste-carriers-brokers';
