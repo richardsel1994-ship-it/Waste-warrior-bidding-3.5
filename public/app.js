@@ -157,7 +157,7 @@
       ['Bin bag (each)', '£1.50–£3.00'],
       ['Single chair', '£10–£30'],
       ['Fridge', '£30–£200'],
-      ['Bathroom rip-out', 'About £250'],
+      ['Bathroom rip-out', '£250–£400'],
       ['Garden clearance', 'About £400'],
       ['House clearance', 'About £1,000'],
     ];
