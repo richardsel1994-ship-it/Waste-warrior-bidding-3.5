@@ -66,6 +66,8 @@ function migrate(db) {
     collect_by: "TEXT NOT NULL DEFAULT ''",
     // The customer's service fee percentage, fixed when they start paying
     customer_fee_pct: 'REAL',
+    // The hauler's fee percentage, fixed at the same time
+    provider_fee_pct: 'REAL',
   };
   for (const [name, type] of Object.entries(add)) {
     if (!cols.includes(name)) db.exec(`ALTER TABLE listings ADD COLUMN ${name} ${type}`);
@@ -88,6 +90,12 @@ function migrate(db) {
     plus_until: 'INTEGER',
     plus_cancel_at_end: 'INTEGER NOT NULL DEFAULT 0',
     plus_session_id: "TEXT NOT NULL DEFAULT ''",
+    // Hauler Pro subscription (haulers keep more of each winning bid)
+    pro_subscription_id: "TEXT NOT NULL DEFAULT ''",
+    pro_status: "TEXT NOT NULL DEFAULT ''",
+    pro_until: 'INTEGER',
+    pro_cancel_at_end: 'INTEGER NOT NULL DEFAULT 0',
+    pro_session_id: "TEXT NOT NULL DEFAULT ''",
   };
   for (const [name, type] of Object.entries(addUser)) {
     if (!userCols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);

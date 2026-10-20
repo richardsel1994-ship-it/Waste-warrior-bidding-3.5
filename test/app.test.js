@@ -387,3 +387,44 @@ test('plus: subscribers pay the lower customer fee; providers still pay the stan
     srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+test('hauler pro: subscribed haulers have a lower fee taken from their winning bid', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-pro-'));
+  const a = createApp({ dataDir: d, jwtSecret: 't', demoPayments: true, stripeKey: '' });
+  const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
+  const b = `http://localhost:${srv.address().port}`;
+  const call = async (method, url, body, cookie) => {
+    const res = await fetch(b + url, { method, headers: { ...(cookie ? { cookie } : {}), ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, json: await res.json() };
+  };
+  const reg = async (e, n) => {
+    const res = await fetch(b + '/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: e, name: n, password: 'password123' }) });
+    return (res.headers.get('set-cookie') || '').split(';')[0];
+  };
+  try {
+    assert.deepEqual((await call('GET', '/api/config')).json.pro, { available: true, feePercent: 6, pricePence: 499 });
+    const cust = await reg('c2@x.com', 'Cam Customer');
+    const haul = await reg('h2@x.com', 'Hal Hauler');
+    const sub = await call('POST', '/api/pro/checkout', null, haul);
+    assert.equal(sub.json.user.pro.active, true);
+    assert.equal(sub.json.user.plus.active, false);
+
+    const created = await fetch(b + '/api/listings', { method: 'POST', headers: { cookie: cust }, body: listingForm() }).then((r) => r.json());
+    await call('POST', `/api/listings/${created.id}/bids`, { amount: 100 }, haul);
+    a.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, created.id);
+    // customer has no plan: 10% on top; hauler is Pro: only 6% taken
+    const forCustomer = await call('GET', `/api/listings/${created.id}`, null, cust);
+    assert.equal(forCustomer.json.listing.customerTotalCents, 11000);
+    assert.equal((await call('POST', `/api/listings/${created.id}/checkout`, null, cust)).status, 200);
+    const forHauler = await call('GET', `/api/listings/${created.id}`, null, haul);
+    assert.equal(forHauler.json.listing.providerFeePercent, 6);
+    assert.equal(forHauler.json.listing.providerPayoutCents, 9400);
+
+    // the fee was fixed at payment, so cancelling later doesn't change it
+    await call('POST', '/api/pro/cancel', null, haul);
+    a.db.prepare("UPDATE users SET pro_status = 'canceled'").run();
+    assert.equal((await call('GET', `/api/listings/${created.id}`, null, haul)).json.listing.providerPayoutCents, 9400);
+  } finally {
+    srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
+  }
+});
