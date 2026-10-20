@@ -49,7 +49,7 @@ function listingForm(over = {}, png = PNG) {
     title: 'Old sofa and garden waste', description: 'Two-seater sofa plus six bags of hedge cuttings',
     category: 'Household', loadSize: 'Half van', location: 'Leeds LS6', address: '12 Example Road, Leeds LS6 1AA',
     accessNotes: 'Side gate, parking on street', collectFrom: day(2), collectBy: day(5),
-    startPrice: '100', durationHours: '24', ...over,
+    startPrice: '100', durationHours: '3', ...over,
   };
   for (const [k, v] of Object.entries(d)) f.append(k, v);
   if (png) f.append('images', new Blob([png], { type: 'image/png' }), 'a.png');
@@ -76,6 +76,9 @@ test('listing creation needs auth, photo, and a real image', async () => {
   assert.equal((await api('POST', '/api/listings', { cookie: s, form: listingForm({ collectFrom: day(5), collectBy: day(2) }) })).status, 400);
   // bidding (7 days) would still be open after the last collection date
   assert.equal((await api('POST', '/api/listings', { cookie: s, form: listingForm({ durationHours: '168' }) })).status, 400);
+  assert.equal((await api('POST', '/api/listings', { cookie: s, form: listingForm({ durationHours: '24' }) })).status, 400);
+  assert.equal((await api('POST', '/api/listings', { cookie: s, form: listingForm({ durationHours: '1' }) })).status, 201);
+  assert.equal((await api('POST', '/api/listings', { cookie: s, form: listingForm({ durationHours: '23' }) })).status, 201);
   assert.equal((await api('POST', '/api/listings', { cookie: s, form: listingForm({ address: '' }) })).status, 400);
   const ok = await api('POST', '/api/listings', { cookie: s, form: listingForm() });
   assert.equal(ok.status, 201);

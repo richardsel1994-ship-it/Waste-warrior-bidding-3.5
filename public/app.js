@@ -275,7 +275,7 @@
         h('label', {}, 'Maximum budget (£)', h('input', { name: 'startPrice', type: 'number', min: 1, step: '0.01', required: true }),
           h('span', { class: 'hint', text: `Bids start here and go down. A ${state.config.feePercent}% service fee is added when you pay.` })),
         h('label', {}, 'Bidding open for', h('select', { name: 'durationHours' },
-          ...[[24, '1 day'], [72, '3 days'], [168, '7 days'], [336, '14 days']].map(([v, t]) => h('option', { value: v, text: t, selected: v === 72 })))),
+          ...Array.from({ length: 23 }, (_, i) => i + 1).map((hours) => h('option', { value: hours, text: `${hours} ${hours === 1 ? 'hour' : 'hours'}`, selected: hours === 3 })))),
         h('label', {}, 'Town or postcode area', h('input', { name: 'location', maxlength: 100, required: true, placeholder: 'e.g. Leeds LS6' }),
           h('span', { class: 'hint', text: 'Shown to everyone' })),
         h('label', {}, 'Full address', h('input', { name: 'address', maxlength: 200, required: true, autocomplete: 'street-address', placeholder: 'House number, street, postcode' }),
