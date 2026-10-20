@@ -162,7 +162,7 @@
           h('h1', {}, 'Get your waste cleared for ', h('span', { class: 'hl', text: 'less' }), '.'),
           h('p', { text: 'Post your job with photos and dates. Local waste removal providers bid against each other to do it, and the lowest price wins.' }),
           h('div', { class: 'actions' },
-            h('a', { class: 'btn accent lg', href: state.user ? '#/post' : '#/register', text: 'Post a job — it’s free' }),
+            h('a', { class: 'btn accent lg', href: state.user ? '#/post' : '#/register', text: 'Post a job' }),
             h('button', { class: 'btn ghost lg', type: 'button', text: 'Find jobs to bid on', onclick: () => document.getElementById('browse').scrollIntoView() })),
           h('ul', { class: 'trust' }, h('li', { text: '🔒 Card payments by Stripe' }), h('li', { text: '📉 Lowest bid wins' }), h('li', { text: '📸 Photo jobs' }))),
         h('img', { class: 'hero-art', src: '/hero.svg', alt: '' })),
