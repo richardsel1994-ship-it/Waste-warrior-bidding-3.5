@@ -53,9 +53,14 @@ function createApp(opts = {}) {
     plusPriceId: opts.plusPriceId !== undefined ? opts.plusPriceId : process.env.STRIPE_PLUS_PRICE_ID,
     plusFeePercent: Number(opts.plusFeePercent ?? process.env.PLUS_FEE_PERCENT ?? 6),
     plusPricePence: Number(opts.plusPricePence ?? process.env.PLUS_PRICE_PENCE ?? 295),
+    // Hauler Pro: a monthly subscription that lowers the fee taken from a hauler's winning bid.
+    proPriceId: opts.proPriceId !== undefined ? opts.proPriceId : process.env.STRIPE_PRO_PRICE_ID,
+    proFeePercent: Number(opts.proFeePercent ?? process.env.PRO_FEE_PERCENT ?? 6),
+    proPricePence: Number(opts.proPricePence ?? process.env.PRO_PRICE_PENCE ?? 499),
   };
   if (!(config.feePercent >= 0 && config.feePercent < 50)) throw new Error('PLATFORM_FEE_PERCENT must be between 0 and 49');
   if (!(config.plusFeePercent >= 0 && config.plusFeePercent <= config.feePercent)) throw new Error('PLUS_FEE_PERCENT must be between 0 and PLATFORM_FEE_PERCENT');
+  if (!(config.proFeePercent >= 0 && config.proFeePercent <= config.feePercent)) throw new Error('PRO_FEE_PERCENT must be between 0 and PLATFORM_FEE_PERCENT');
   if (!config.jwtSecret) {
     if (config.production) throw new Error('JWT_SECRET must be set in production');
     config.jwtSecret = crypto.randomBytes(32).toString('hex');
@@ -91,21 +96,35 @@ function createApp(opts = {}) {
   const one = (sql, ...p) => db.prepare(sql).get(...p);
   const run = (sql, ...p) => db.prepare(sql).run(...p);
 
-  // Money split for an accepted bid. The customer pays bid + their fee; the provider is owed bid - the provider fee.
-  // Plus subscribers pay a lower customer fee; the provider fee is the same for everyone.
-  function fees(bidCents, customerPct = config.feePercent) {
+  // Money split for an accepted bid. The customer pays bid + their fee; the provider is owed bid - their fee.
+  // Plus subscribers (customers) and Hauler Pro subscribers (providers) each pay a lower fee.
+  function fees(bidCents, customerPct = config.feePercent, providerPct = config.feePercent) {
     const cFee = Math.round(bidCents * customerPct / 100);
-    const pFee = Math.round(bidCents * config.feePercent / 100);
-    return { customerFeePercent: customerPct, customerFeeCents: cFee, customerTotalCents: bidCents + cFee, providerFeeCents: pFee, providerPayoutCents: bidCents - pFee, platformCents: cFee + pFee };
+    const pFee = Math.round(bidCents * providerPct / 100);
+    return {
+      customerFeePercent: customerPct, customerFeeCents: cFee, customerTotalCents: bidCents + cFee,
+      providerFeePercent: providerPct, providerFeeCents: pFee, providerPayoutCents: bidCents - pFee, platformCents: cFee + pFee,
+    };
   }
-  const plusAvailable = () => Boolean((config.stripe && config.plusPriceId) || config.demoPayments);
-  function isPlus(u) {
-    return Boolean(u && ['active', 'trialing'].includes(u.plus_status) && (!u.plus_until || u.plus_until > now()));
+  // Monthly plans. The key doubles as the users-table column prefix (plus_status, pro_status, ...).
+  const PLANS = {
+    plus: { name: 'Waste Warrior Plus', who: 'customer', priceId: config.plusPriceId, feePercent: config.plusFeePercent, pricePence: config.plusPricePence },
+    pro: { name: 'Hauler Pro', who: 'hauler', priceId: config.proPriceId, feePercent: config.proFeePercent, pricePence: config.proPricePence },
+  };
+  const planAvailable = (p) => Boolean((config.stripe && PLANS[p].priceId) || config.demoPayments);
+  function onPlan(u, p) {
+    return Boolean(u && ['active', 'trialing'].includes(u[`${p}_status`]) && (!u[`${p}_until`] || u[`${p}_until`] > now()));
   }
-  // The fee a customer pays right now, or the one fixed when they started paying for this job.
+  const isPlus = (u) => onPlan(u, 'plus');
+  const isPro = (u) => onPlan(u, 'pro');
+  // The fees for a job right now, or the ones fixed when the customer started paying for it.
   function customerPctFor(listing, seller) {
     if (listing.customer_fee_pct != null) return listing.customer_fee_pct;
     return isPlus(seller) ? config.plusFeePercent : config.feePercent;
+  }
+  function providerPctFor(listing, winner) {
+    if (listing.provider_fee_pct != null) return listing.provider_fee_pct;
+    return isPro(winner) ? config.proFeePercent : config.feePercent;
   }
 
   // Lowest price wins; on a tie the earlier bid wins.
@@ -131,7 +150,7 @@ function createApp(opts = {}) {
   function publicListing(l, userId) {
     const low = one('SELECT MIN(amount_cents) AS m, COUNT(*) AS n FROM bids WHERE listing_id = ?', l.id);
     const customer = one('SELECT name, email, plus_status, plus_until FROM users WHERE id = ?', l.seller_id);
-    const winner = l.winner_id ? one('SELECT name, email FROM users WHERE id = ?', l.winner_id) : null;
+    const winner = l.winner_id ? one('SELECT name, email, pro_status, pro_until FROM users WHERE id = ?', l.winner_id) : null;
     const current = low.n ? low.m : l.start_price_cents;
     const isSeller = userId === l.seller_id;
     const isWinner = l.winner_id != null && userId === l.winner_id;
@@ -148,9 +167,9 @@ function createApp(opts = {}) {
       createdAt: l.created_at,
     };
     if (l.winning_bid_cents != null) {
-      const f = fees(l.winning_bid_cents, customerPctFor(l, customer));
+      const f = fees(l.winning_bid_cents, customerPctFor(l, customer), providerPctFor(l, winner));
       if (isSeller) Object.assign(out, { customerFeePercent: f.customerFeePercent, customerFeeCents: f.customerFeeCents, customerTotalCents: f.customerTotalCents });
-      if (isWinner) Object.assign(out, { providerFeeCents: f.providerFeeCents, providerPayoutCents: f.providerPayoutCents });
+      if (isWinner) Object.assign(out, { providerFeePercent: f.providerFeePercent, providerFeeCents: f.providerFeeCents, providerPayoutCents: f.providerPayoutCents });
     }
     // The full address and contact details are private until the job is booked.
     if (isSeller) out.address = l.address;
@@ -176,9 +195,10 @@ function createApp(opts = {}) {
       r.number, r.status, r.name || '', r.tier || '', r.expiresOn || '', now(), userId);
   }
   const USER_COLS = 'id, email, name, carrier_number, carrier_status, carrier_name, carrier_tier, carrier_expires, carrier_checked_at, '
-    + 'stripe_customer_id, plus_subscription_id, plus_status, plus_until, plus_cancel_at_end, plus_session_id';
-  const plusJson = (u) => ({ active: isPlus(u), status: u.plus_status || null, until: u.plus_until || null, cancelAtEnd: Boolean(u.plus_cancel_at_end) });
-  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u), plus: plusJson(u) } : null);
+    + 'stripe_customer_id, plus_subscription_id, plus_status, plus_until, plus_cancel_at_end, plus_session_id, '
+    + 'pro_subscription_id, pro_status, pro_until, pro_cancel_at_end, pro_session_id';
+  const planJson = (u, p) => ({ active: onPlan(u, p), status: u[`${p}_status`] || null, until: u[`${p}_until`] || null, cancelAtEnd: Boolean(u[`${p}_cancel_at_end`]) });
+  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u), plus: planJson(u, 'plus'), pro: planJson(u, 'pro') } : null);
 
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -208,15 +228,17 @@ function createApp(opts = {}) {
   function markPaid(listingId, sessionId) {
     run("UPDATE listings SET status = 'paid' WHERE id = ? AND status = 'closed' AND stripe_session_id = ?", listingId, sessionId);
   }
-  // Store a Plus subscription's state against the user it belongs to.
-  function syncSubscription(sub, userId) {
+  // Store a subscription's state against the user and plan it belongs to.
+  function syncSubscription(sub, userId, planHint) {
     if (!sub) return;
+    let plan = planHint || (sub.metadata && sub.metadata.plan);
+    if (!PLANS[plan]) plan = Object.keys(PLANS).find((p) => one(`SELECT 1 FROM users WHERE ${p}_subscription_id = ?`, sub.id)) || 'plus';
     const uid = userId || Number(sub.metadata && sub.metadata.user_id)
-      || (one('SELECT id FROM users WHERE plus_subscription_id = ?', sub.id) || {}).id;
+      || (one(`SELECT id FROM users WHERE ${plan}_subscription_id = ?`, sub.id) || {}).id;
     if (!uid) return;
     const periodEnd = sub.current_period_end || (sub.items && sub.items.data && sub.items.data[0] && sub.items.data[0].current_period_end) || null;
     const customer = typeof sub.customer === 'string' ? sub.customer : (sub.customer && sub.customer.id) || '';
-    run(`UPDATE users SET plus_subscription_id = ?, plus_status = ?, plus_until = ?, plus_cancel_at_end = ?,
+    run(`UPDATE users SET ${plan}_subscription_id = ?, ${plan}_status = ?, ${plan}_until = ?, ${plan}_cancel_at_end = ?,
            stripe_customer_id = CASE WHEN ? != '' THEN ? ELSE stripe_customer_id END WHERE id = ?`,
       sub.id, sub.status, periodEnd ? periodEnd * 1000 : null, sub.cancel_at_period_end ? 1 : 0, customer, customer, uid);
   }
@@ -233,7 +255,7 @@ function createApp(opts = {}) {
     if (event.type === 'checkout.session.completed') {
       if (o.mode === 'subscription' && o.subscription) {
         const sub = typeof o.subscription === 'string' ? await config.stripe.subscriptions.retrieve(o.subscription) : o.subscription;
-        syncSubscription(sub, Number(o.metadata && o.metadata.user_id) || Number(o.client_reference_id) || null);
+        syncSubscription(sub, Number(o.metadata && o.metadata.user_id) || Number(o.client_reference_id) || null, o.metadata && o.metadata.plan);
       } else if (o.payment_status === 'paid') {
         markPaid(Number(o.metadata && o.metadata.listing_id), o.id);
       }
@@ -323,7 +345,8 @@ function createApp(opts = {}) {
     categories: CATEGORIES,
     loadSizes: LOAD_SIZES,
     feePercent: config.feePercent,
-    plus: { available: plusAvailable(), feePercent: config.plusFeePercent, pricePence: config.plusPricePence },
+    plus: { available: planAvailable('plus'), feePercent: PLANS.plus.feePercent, pricePence: PLANS.plus.pricePence },
+    pro: { available: planAvailable('pro'), feePercent: PLANS.pro.feePercent, pricePence: PLANS.pro.pricePence },
     maxImages: MAX_IMAGES,
     paymentMode: config.stripe ? 'stripe' : config.demoPayments ? 'demo' : 'off',
   }));
@@ -448,59 +471,61 @@ function createApp(opts = {}) {
     res.status(201).json({ ok: true });
   });
 
-  // ---------- Waste Warrior Plus subscription ----------
+  // ---------- monthly plans: Plus (customers) and Hauler Pro (haulers) ----------
   const meRow = (id) => one(`SELECT ${USER_COLS} FROM users WHERE id = ?`, id);
 
-  app.post('/api/plus/checkout', auth(true), wrap(async (req, res) => {
-    if (isPlus(req.user)) throw new HttpError(409, 'You already have Waste Warrior Plus');
-    if (config.stripe && config.plusPriceId) {
-      const session = await config.stripe.checkout.sessions.create({
-        mode: 'subscription',
-        line_items: [{ price: config.plusPriceId, quantity: 1 }],
-        ...(req.user.stripe_customer_id ? { customer: req.user.stripe_customer_id } : { customer_email: req.user.email }),
-        client_reference_id: String(req.user.id),
-        metadata: { user_id: String(req.user.id), kind: 'plus' },
-        subscription_data: { metadata: { user_id: String(req.user.id) } },
-        success_url: `${config.baseUrl}/#/plus?subscribed=1`,
-        cancel_url: `${config.baseUrl}/#/plus`,
-      });
-      run('UPDATE users SET plus_session_id = ? WHERE id = ?', session.id, req.user.id);
-      return res.json({ url: session.url });
-    }
-    if (config.demoPayments) {
-      run("UPDATE users SET plus_status = 'active', plus_until = ?, plus_cancel_at_end = 0, plus_subscription_id = 'demo' WHERE id = ?", now() + 30 * DAY_MS, req.user.id);
-      return res.json({ demo: true, user: meJson(meRow(req.user.id)) });
-    }
-    throw new HttpError(503, 'Subscriptions are not available yet');
-  }));
-
-  // Called when the customer returns from Stripe, so Plus starts even before the webhook arrives.
-  app.post('/api/plus/verify', auth(true), wrap(async (req, res) => {
-    const u = req.user;
-    if (config.stripe && u.plus_session_id && !isPlus(u)) {
-      const s = await config.stripe.checkout.sessions.retrieve(u.plus_session_id);
-      if (s.status === 'complete' && s.subscription) {
-        const sub = typeof s.subscription === 'string' ? await config.stripe.subscriptions.retrieve(s.subscription) : s.subscription;
-        syncSubscription(sub, u.id);
+  for (const [p, plan] of Object.entries(PLANS)) {
+    app.post(`/api/${p}/checkout`, auth(true), wrap(async (req, res) => {
+      if (onPlan(req.user, p)) throw new HttpError(409, `You already have ${plan.name}`);
+      if (config.stripe && plan.priceId) {
+        const session = await config.stripe.checkout.sessions.create({
+          mode: 'subscription',
+          line_items: [{ price: plan.priceId, quantity: 1 }],
+          ...(req.user.stripe_customer_id ? { customer: req.user.stripe_customer_id } : { customer_email: req.user.email }),
+          client_reference_id: String(req.user.id),
+          metadata: { user_id: String(req.user.id), plan: p },
+          subscription_data: { metadata: { user_id: String(req.user.id), plan: p } },
+          success_url: `${config.baseUrl}/#/plus?subscribed=${p}`,
+          cancel_url: `${config.baseUrl}/#/plus`,
+        });
+        run(`UPDATE users SET ${p}_session_id = ? WHERE id = ?`, session.id, req.user.id);
+        return res.json({ url: session.url });
       }
-    }
-    res.json({ user: meJson(meRow(u.id)) });
-  }));
+      if (config.demoPayments) {
+        run(`UPDATE users SET ${p}_status = 'active', ${p}_until = ?, ${p}_cancel_at_end = 0, ${p}_subscription_id = 'demo' WHERE id = ?`, now() + 30 * DAY_MS, req.user.id);
+        return res.json({ demo: true, user: meJson(meRow(req.user.id)) });
+      }
+      throw new HttpError(503, 'Subscriptions are not available yet');
+    }));
 
-  // Cancel at the end of the paid month, or undo that.
-  async function setCancel(req, res, cancel) {
-    const u = req.user;
-    if (!u.plus_subscription_id || !isPlus(u)) throw new HttpError(409, 'You don’t have an active Plus subscription');
-    if (u.plus_subscription_id === 'demo' || !config.stripe) {
-      run('UPDATE users SET plus_cancel_at_end = ? WHERE id = ?', cancel ? 1 : 0, u.id);
-    } else {
-      const sub = await config.stripe.subscriptions.update(u.plus_subscription_id, { cancel_at_period_end: cancel });
-      syncSubscription(sub, u.id);
-    }
-    res.json({ user: meJson(meRow(u.id)) });
+    // Called on return from Stripe, so the plan starts even before the webhook arrives.
+    app.post(`/api/${p}/verify`, auth(true), wrap(async (req, res) => {
+      const u = req.user;
+      if (config.stripe && u[`${p}_session_id`] && !onPlan(u, p)) {
+        const s = await config.stripe.checkout.sessions.retrieve(u[`${p}_session_id`]);
+        if (s.status === 'complete' && s.subscription) {
+          const sub = typeof s.subscription === 'string' ? await config.stripe.subscriptions.retrieve(s.subscription) : s.subscription;
+          syncSubscription(sub, u.id, p);
+        }
+      }
+      res.json({ user: meJson(meRow(u.id)) });
+    }));
+
+    // Cancel at the end of the paid month, or undo that.
+    const setCancel = async (req, res, cancel) => {
+      const u = req.user;
+      const subId = u[`${p}_subscription_id`];
+      if (!subId || !onPlan(u, p)) throw new HttpError(409, `You don’t have an active ${plan.name} subscription`);
+      if (subId === 'demo' || !config.stripe) {
+        run(`UPDATE users SET ${p}_cancel_at_end = ? WHERE id = ?`, cancel ? 1 : 0, u.id);
+      } else {
+        syncSubscription(await config.stripe.subscriptions.update(subId, { cancel_at_period_end: cancel }), u.id, p);
+      }
+      res.json({ user: meJson(meRow(u.id)) });
+    };
+    app.post(`/api/${p}/cancel`, auth(true), wrap((req, res) => setCancel(req, res, true)));
+    app.post(`/api/${p}/resume`, auth(true), wrap((req, res) => setCancel(req, res, false)));
   }
-  app.post('/api/plus/cancel', auth(true), wrap((req, res) => setCancel(req, res, true)));
-  app.post('/api/plus/resume', auth(true), wrap((req, res) => setCancel(req, res, false)));
 
   // ---------- haulers and waste carrier checks ----------
   const checkLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, legacyHeaders: false });
@@ -569,9 +594,11 @@ function createApp(opts = {}) {
     if (l.status === 'paid') throw new HttpError(409, 'Already paid');
     if (l.status !== 'closed') throw new HttpError(409, 'This job is not waiting for payment');
     const seller = one('SELECT plus_status, plus_until FROM users WHERE id = ?', l.seller_id);
+    const winner = one('SELECT pro_status, pro_until FROM users WHERE id = ?', l.winner_id);
     const pct = isPlus(seller) ? config.plusFeePercent : config.feePercent;
+    const ppct = isPro(winner) ? config.proFeePercent : config.feePercent;
     if (config.stripe) {
-      const f = fees(l.winning_bid_cents, pct);
+      const f = fees(l.winning_bid_cents, pct, ppct);
       const item = (name, amount) => ({ quantity: 1, price_data: { currency: 'gbp', unit_amount: amount, product_data: { name } } });
       const session = await config.stripe.checkout.sessions.create({
         mode: 'payment',
@@ -590,11 +617,11 @@ function createApp(opts = {}) {
         success_url: `${config.baseUrl}/#/listing/${l.id}?paid=1`,
         cancel_url: `${config.baseUrl}/#/listing/${l.id}`,
       });
-      run('UPDATE listings SET stripe_session_id = ?, customer_fee_pct = ? WHERE id = ?', session.id, pct, l.id);
+      run('UPDATE listings SET stripe_session_id = ?, customer_fee_pct = ?, provider_fee_pct = ? WHERE id = ?', session.id, pct, ppct, l.id);
       return res.json({ url: session.url });
     }
     if (config.demoPayments) {
-      run("UPDATE listings SET status = 'paid', stripe_session_id = 'demo', customer_fee_pct = ? WHERE id = ?", pct, l.id);
+      run("UPDATE listings SET status = 'paid', stripe_session_id = 'demo', customer_fee_pct = ?, provider_fee_pct = ? WHERE id = ?", pct, ppct, l.id);
       return res.json({ demo: true });
     }
     throw new HttpError(503, 'Payments are not configured yet');
