@@ -158,7 +158,7 @@
       ['Single chair', '£10–£30'],
       ['Fridge', '£30–£200'],
       ['Bathroom rip-out', '£250–£400'],
-      ['Garden clearance', 'About £400'],
+      ['Garden clearance', '£400–£600'],
       ['House clearance', 'About £1,000'],
     ];
 
