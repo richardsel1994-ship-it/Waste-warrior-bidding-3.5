@@ -157,7 +157,7 @@ h1 { font-size: clamp(1.8rem, 4vw, 2.4rem); }
 .trust { list-style: none; padding: 0; margin: 26px 0 0; display: flex; gap: 8px 20px; flex-wrap: wrap; font-size: .9rem; opacity: .92; }
 .stats { margin: -28px 24px 0; position: relative; z-index: 2; }
 .stat { box-shadow: var(--shadow); } .stat b { font-size: 1.7rem; }
-.block { margin-top: 56px; } .block > h2 { font-size: 1.6rem; margin-bottom: 18px; }
+section.block { margin-top: 56px; } section.block > h2 { font-size: 1.6rem; margin-bottom: 18px; }
 .steps { margin: 0; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
 .tile { display: grid; gap: 6px; justify-items: center; padding: 18px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; transition: transform .15s, border-color .15s, box-shadow .15s; }
@@ -186,3 +186,10 @@ main > * { animation: rise .35s ease both; }
   .stats { margin: -18px 8px 0; } .cta { padding: 26px 22px; }
 }
 @media (prefers-reduced-motion: reduce) { .hero-art, main > *, .skel .photo, .skel .line { animation: none !important; } }
+
+/* job details */
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 0 0 16px; }
+.facts div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.panel .facts div { background: var(--bg); border: 0; }
+.facts dt { color: var(--muted); font-size: .8rem; }
+.facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; white-space: pre-wrap; }

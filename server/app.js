@@ -10,8 +10,11 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { openDb, tx } = require('./db');
 
-const CATEGORIES = ['Plastic', 'Metal', 'Paper', 'Glass', 'E-waste', 'Organic', 'Textile', 'Wood'];
-const MIN_INCREMENT_CENTS = 50;
+const CATEGORIES = ['Household', 'Garden', 'Furniture', 'Appliances', 'Building rubble', 'Mixed recycling', 'Commercial'];
+const LOAD_SIZES = ['Single item', 'Quarter van', 'Half van', 'Full van', 'Skip-sized'];
+// Reverse auction: each new bid must undercut the lowest bid by at least this much.
+const MIN_DECREMENT_CENTS = 50;
+const DAY_MS = 24 * 3600_000;
 const MAX_IMAGES = 4;
 const IMAGE_TYPES = [
   { ext: 'jpg', test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
@@ -68,13 +71,16 @@ function createApp(opts = {}) {
   const one = (sql, ...p) => db.prepare(sql).get(...p);
   const run = (sql, ...p) => db.prepare(sql).run(...p);
 
+  // Lowest price wins; on a tie the earlier bid wins.
+  const lowestBid = (listingId) => one('SELECT user_id, amount_cents FROM bids WHERE listing_id = ? ORDER BY amount_cents ASC, id ASC LIMIT 1', listingId);
+
   function settle(listing) {
     if (!listing || listing.status !== 'open' || listing.ends_at > now()) return listing;
     tx(db, () => {
       const l = one('SELECT * FROM listings WHERE id = ?', listing.id);
       if (l.status !== 'open') return;
-      const top = one('SELECT user_id, amount_cents FROM bids WHERE listing_id = ? ORDER BY amount_cents DESC, id ASC LIMIT 1', l.id);
-      if (top) run("UPDATE listings SET status = 'closed', winner_id = ?, winning_bid_cents = ? WHERE id = ?", top.user_id, top.amount_cents, l.id);
+      const low = lowestBid(l.id);
+      if (low) run("UPDATE listings SET status = 'closed', winner_id = ?, winning_bid_cents = ? WHERE id = ?", low.user_id, low.amount_cents, l.id);
       else run("UPDATE listings SET status = 'expired' WHERE id = ?", l.id);
     });
     return one('SELECT * FROM listings WHERE id = ?', listing.id);
@@ -86,21 +92,29 @@ function createApp(opts = {}) {
   timer.unref();
 
   function publicListing(l, userId) {
-    const top = one('SELECT MAX(amount_cents) AS m, COUNT(*) AS n FROM bids WHERE listing_id = ?', l.id);
-    const seller = one('SELECT name FROM users WHERE id = ?', l.seller_id);
-    const current = top.m || l.start_price_cents;
-    return {
+    const low = one('SELECT MIN(amount_cents) AS m, COUNT(*) AS n FROM bids WHERE listing_id = ?', l.id);
+    const customer = one('SELECT name, email FROM users WHERE id = ?', l.seller_id);
+    const winner = l.winner_id ? one('SELECT name, email FROM users WHERE id = ?', l.winner_id) : null;
+    const current = low.n ? low.m : l.start_price_cents;
+    const isSeller = userId === l.seller_id;
+    const isWinner = l.winner_id != null && userId === l.winner_id;
+    const out = {
       id: l.id, title: l.title, description: l.description, category: l.category,
-      qtyKg: l.qty_kg, location: l.location, images: JSON.parse(l.images),
-      startPriceCents: l.start_price_cents, currentBidCents: current, bidCount: top.n,
-      minNextBidCents: top.n ? current + MIN_INCREMENT_CENTS : l.start_price_cents,
-      endsAt: l.ends_at, status: l.status, sellerName: seller.name,
-      isSeller: userId === l.seller_id,
-      isWinner: l.winner_id != null && userId === l.winner_id,
-      winnerName: l.winner_id ? one('SELECT name FROM users WHERE id = ?', l.winner_id).name : null,
+      loadSize: l.load_size, location: l.location, accessNotes: l.access_notes,
+      collectFrom: l.collect_from, collectBy: l.collect_by, images: JSON.parse(l.images),
+      startPriceCents: l.start_price_cents, currentBidCents: current, bidCount: low.n,
+      maxNextBidCents: low.n ? current - MIN_DECREMENT_CENTS : l.start_price_cents,
+      endsAt: l.ends_at, status: l.status, sellerName: customer.name,
+      isSeller, isWinner,
+      winnerName: winner ? winner.name : null,
       winningBidCents: l.winning_bid_cents,
       createdAt: l.created_at,
     };
+    // The full address and contact details are private until the job is booked.
+    if (isSeller) out.address = l.address;
+    if (l.status === 'paid' && isWinner) Object.assign(out, { address: l.address, contact: { name: customer.name, email: customer.email } });
+    if (l.status === 'paid' && isSeller) out.contact = { name: winner.name, email: winner.email };
+    return out;
   }
 
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -182,6 +196,7 @@ function createApp(opts = {}) {
   // ---------- config for the client ----------
   app.get('/api/config', (req, res) => res.json({
     categories: CATEGORIES,
+    loadSizes: LOAD_SIZES,
     maxImages: MAX_IMAGES,
     paymentMode: config.stripe ? 'stripe' : config.demoPayments ? 'demo' : 'off',
   }));
@@ -189,24 +204,40 @@ function createApp(opts = {}) {
   // ---------- listings ----------
   const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024, files: MAX_IMAGES, fields: 10 },
+    limits: { fileSize: 5 * 1024 * 1024, files: MAX_IMAGES, fields: 20 },
   });
+
+  // Collection window as YYYY-MM-DD dates. Bidding must close before the last collection day.
+  function parseDates(from, by, biddingEnds) {
+    const re = /^\d{4}-\d{2}-\d{2}$/;
+    const day = (v) => (re.test(String(v)) ? Date.parse(`${v}T00:00:00Z`) : NaN);
+    const f = day(from), t = day(by);
+    if (Number.isNaN(f) || Number.isNaN(t)) throw new HttpError(400, 'Choose the dates the waste can be collected');
+    if (t < f) throw new HttpError(400, 'The last collection date must be on or after the first');
+    if (f < now() - 2 * DAY_MS || t > now() + 180 * DAY_MS) throw new HttpError(400, 'Collection dates must be within the next 6 months');
+    if (t + DAY_MS <= biddingEnds) throw new HttpError(400, 'Bidding must close before the last collection date. Pick a later date or shorter bidding time.');
+    return { collectFrom: String(from), collectBy: String(by) };
+  }
 
   app.post('/api/listings', auth(true), upload.array('images', MAX_IMAGES), wrap(async (req, res) => {
     const b = req.body || {};
     const title = String(b.title || '').trim();
     const description = String(b.description || '').trim();
     const location = String(b.location || '').trim();
-    const qty = Number(b.qtyKg);
+    const address = String(b.address || '').trim();
+    const accessNotes = String(b.accessNotes || '').trim();
     const startCents = Math.round(Number(b.startPrice) * 100);
     const hours = Number(b.durationHours);
     if (title.length < 3 || title.length > 80) throw new HttpError(400, 'Title must be 3-80 characters');
     if (description.length < 10 || description.length > 2000) throw new HttpError(400, 'Description must be 10-2000 characters');
-    if (!CATEGORIES.includes(b.category)) throw new HttpError(400, 'Choose a valid category');
-    if (location.length < 2 || location.length > 100) throw new HttpError(400, 'Enter a pickup location');
-    if (!(qty > 0 && qty <= 1_000_000)) throw new HttpError(400, 'Enter a valid quantity in kg');
-    if (!Number.isInteger(startCents) || startCents < 100 || startCents > 100_000_00) throw new HttpError(400, 'Starting price must be between $1 and $100,000');
-    if (![24, 72, 168, 336].includes(hours)) throw new HttpError(400, 'Choose a valid auction length');
+    if (!CATEGORIES.includes(b.category)) throw new HttpError(400, 'Choose a valid waste type');
+    if (!LOAD_SIZES.includes(b.loadSize)) throw new HttpError(400, 'Choose how much waste there is');
+    if (location.length < 2 || location.length > 100) throw new HttpError(400, 'Enter the town or postcode area');
+    if (address.length < 5 || address.length > 200) throw new HttpError(400, 'Enter the collection address');
+    if (accessNotes.length > 500) throw new HttpError(400, 'Access notes must be under 500 characters');
+    if (!Number.isInteger(startCents) || startCents < 100 || startCents > 100_000_00) throw new HttpError(400, 'Maximum budget must be between £1 and £100,000');
+    if (![24, 72, 168, 336].includes(hours)) throw new HttpError(400, 'Choose how long bidding stays open');
+    const { collectFrom, collectBy } = parseDates(b.collectFrom, b.collectBy, now() + hours * 3600_000);
     const files = req.files || [];
     if (!files.length) throw new HttpError(400, 'Add at least one photo');
     const names = [];
@@ -217,9 +248,11 @@ function createApp(opts = {}) {
     }
     files.forEach((f, i) => fs.writeFileSync(path.join(uploadDir, names[i]), f.buffer));
     const r = run(
-      `INSERT INTO listings (seller_id, title, description, category, qty_kg, location, start_price_cents, ends_at, images, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      req.user.id, title, description, b.category, qty, location, startCents, now() + hours * 3600_000, JSON.stringify(names), now());
+      `INSERT INTO listings (seller_id, title, description, category, load_size, location, address, access_notes,
+         collect_from, collect_by, start_price_cents, ends_at, images, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      req.user.id, title, description, b.category, b.loadSize, location, address, accessNotes,
+      collectFrom, collectBy, startCents, now() + hours * 3600_000, JSON.stringify(names), now());
     res.status(201).json({ id: Number(r.lastInsertRowid) });
   }));
 
@@ -231,7 +264,7 @@ function createApp(opts = {}) {
     if (category && category !== 'all') list = list.filter((l) => l.category === category);
     if (search) {
       const s = String(search).toLowerCase().slice(0, 80);
-      list = list.filter((l) => (l.title + ' ' + l.description + ' ' + l.location).toLowerCase().includes(s));
+      list = list.filter((l) => (l.title + ' ' + l.description + ' ' + l.location + ' ' + l.category).toLowerCase().includes(s));
     }
     const sorters = {
       ending: (a, b) => a.endsAt - b.endsAt,
@@ -245,19 +278,19 @@ function createApp(opts = {}) {
   });
 
   app.get('/api/stats', (req, res) => {
-    const l = one("SELECT COUNT(*) AS n, COALESCE(SUM(qty_kg),0) AS kg FROM listings WHERE status != 'expired'");
-    const v = one("SELECT COALESCE(SUM(winning_bid_cents),0) AS c FROM listings WHERE status = 'paid'");
-    res.json({ listings: l.n, kg: Math.round(l.kg), tradedCents: v.c, users: one('SELECT COUNT(*) AS n FROM users').n });
+    const l = one("SELECT COUNT(*) AS n FROM listings WHERE status != 'expired'");
+    const v = one("SELECT COUNT(*) AS n, COALESCE(SUM(start_price_cents - winning_bid_cents),0) AS saved FROM listings WHERE status = 'paid'");
+    res.json({ listings: l.n, booked: v.n, savedCents: v.saved, users: one('SELECT COUNT(*) AS n FROM users').n });
   });
 
   app.get('/api/listings/:id', auth(false), (req, res) => {
     let l = one('SELECT * FROM listings WHERE id = ?', Number(req.params.id));
-    if (!l) throw new HttpError(404, 'Listing not found');
+    if (!l) throw new HttpError(404, 'Job not found');
     l = settle(l);
     const out = publicListing(l, req.user && req.user.id);
     out.bids = q(`SELECT b.amount_cents AS amountCents, b.created_at AS createdAt, u.name AS bidder
                   FROM bids b JOIN users u ON u.id = b.user_id WHERE b.listing_id = ?
-                  ORDER BY b.amount_cents DESC, b.id ASC LIMIT 20`, l.id);
+                  ORDER BY b.amount_cents ASC, b.id ASC LIMIT 20`, l.id);
     res.json({ listing: out, serverTime: now() });
   });
 
@@ -267,13 +300,15 @@ function createApp(opts = {}) {
     if (!Number.isInteger(cents) || cents <= 0 || cents > 100_000_00) throw new HttpError(400, 'Enter a valid bid amount');
     tx(db, () => {
       const l = one('SELECT * FROM listings WHERE id = ?', id);
-      if (!l) throw new HttpError(404, 'Listing not found');
-      if (l.status !== 'open' || l.ends_at <= now()) throw new HttpError(409, 'This auction has ended');
-      if (l.seller_id === req.user.id) throw new HttpError(403, "You can't bid on your own listing");
-      const top = one('SELECT user_id, amount_cents FROM bids WHERE listing_id = ? ORDER BY amount_cents DESC, id ASC LIMIT 1', id);
-      const min = top ? top.amount_cents + MIN_INCREMENT_CENTS : l.start_price_cents;
-      if (cents < min) throw new HttpError(409, `Bid must be at least $${(min / 100).toFixed(2)}`);
-      if (top && top.user_id === req.user.id) throw new HttpError(409, 'You already have the highest bid');
+      if (!l) throw new HttpError(404, 'Job not found');
+      if (l.status !== 'open' || l.ends_at <= now()) throw new HttpError(409, 'Bidding on this job has closed');
+      if (l.seller_id === req.user.id) throw new HttpError(403, "You can't bid on your own job");
+      const low = lowestBid(id);
+      const max = low ? low.amount_cents - MIN_DECREMENT_CENTS : l.start_price_cents;
+      if (low && low.user_id === req.user.id) throw new HttpError(409, 'You already have the lowest bid');
+      if (max < 100) throw new HttpError(409, 'Bids can’t go any lower on this job');
+      if (cents > max) throw new HttpError(409, `Bid must be £${(max / 100).toFixed(2)} or less`);
+      if (cents < 100) throw new HttpError(400, 'Bids must be at least £1');
       run('INSERT INTO bids (listing_id, user_id, amount_cents, created_at) VALUES (?, ?, ?, ?)', id, req.user.id, cents, now());
       // Anti-sniping: a bid in the last 2 minutes extends the auction by 2 minutes.
       if (l.ends_at - now() < 120_000) run('UPDATE listings SET ends_at = ? WHERE id = ?', now() + 120_000, id);
@@ -281,28 +316,36 @@ function createApp(opts = {}) {
     res.status(201).json({ ok: true });
   });
 
-  // ---------- payments ----------
-  function winnerListing(req) {
+  // ---------- accepting the winner and paying ----------
+  // The customer who posted the job accepts the lowest bid by paying for it, or declines it.
+  function customerJob(req) {
     let l = one('SELECT * FROM listings WHERE id = ?', Number(req.params.id));
-    if (!l) throw new HttpError(404, 'Listing not found');
+    if (!l) throw new HttpError(404, 'Job not found');
     l = settle(l);
-    if (l.winner_id !== req.user.id) throw new HttpError(403, 'Only the winning bidder can pay');
+    if (l.seller_id !== req.user.id) throw new HttpError(403, 'Only the customer who posted this job can do that');
     return l;
   }
 
+  app.post('/api/listings/:id/decline', auth(true), (req, res) => {
+    const l = customerJob(req);
+    if (l.status !== 'closed') throw new HttpError(409, 'This job is not waiting for you to accept a bid');
+    run("UPDATE listings SET status = 'cancelled' WHERE id = ? AND status = 'closed'", l.id);
+    res.json({ status: 'cancelled' });
+  });
+
   app.post('/api/listings/:id/checkout', auth(true), wrap(async (req, res) => {
-    const l = winnerListing(req);
+    const l = customerJob(req);
     if (l.status === 'paid') throw new HttpError(409, 'Already paid');
-    if (l.status !== 'closed') throw new HttpError(409, 'This listing is not awaiting payment');
+    if (l.status !== 'closed') throw new HttpError(409, 'This job is not waiting for payment');
     if (config.stripe) {
       const session = await config.stripe.checkout.sessions.create({
         mode: 'payment',
         line_items: [{
           quantity: 1,
           price_data: {
-            currency: 'usd',
+            currency: 'gbp',
             unit_amount: l.winning_bid_cents,
-            product_data: { name: `${l.title} (${l.qty_kg} kg)` },
+            product_data: { name: `Waste collection: ${l.title}` },
           },
         }],
         customer_email: req.user.email,
@@ -321,10 +364,10 @@ function createApp(opts = {}) {
     throw new HttpError(503, 'Payments are not configured yet');
   }));
 
-  // Called when the buyer returns from Stripe; confirms with Stripe directly
+  // Called when the customer returns from Stripe; confirms with Stripe directly
   // so it works even if the webhook has not arrived yet.
   app.post('/api/listings/:id/verify-payment', auth(true), wrap(async (req, res) => {
-    const l = winnerListing(req);
+    const l = customerJob(req);
     if (l.status === 'closed' && config.stripe && l.stripe_session_id && l.stripe_session_id !== 'demo') {
       const s = await config.stripe.checkout.sessions.retrieve(l.stripe_session_id);
       if (s.payment_status === 'paid') markPaid(l.id, s.id);
@@ -339,7 +382,7 @@ function createApp(opts = {}) {
     const selling = q('SELECT * FROM listings WHERE seller_id = ? ORDER BY created_at DESC', uid).map((l) => publicListing(l, uid));
     const bidIds = q('SELECT DISTINCT listing_id FROM bids WHERE user_id = ?', uid).map((r) => r.listing_id);
     const bidding = bidIds.map((id) => publicListing(one('SELECT * FROM listings WHERE id = ?', id), uid))
-      .map((l) => ({ ...l, leading: one('SELECT user_id FROM bids WHERE listing_id = ? ORDER BY amount_cents DESC, id ASC LIMIT 1', l.id).user_id === uid }))
+      .map((l) => ({ ...l, leading: lowestBid(l.id).user_id === uid }))
       .sort((a, b) => b.createdAt - a.createdAt);
     res.json({ selling, bidding });
   });
