@@ -87,7 +87,7 @@ function createCarrierChecker({ fetchImpl = globalThis.fetch, now = Date.now } =
     const url = REGISTER + encodeURIComponent(c.number);
     let res;
     try {
-      res = await fetchImpl(url, { headers: { accept: 'text/html' }, signal: AbortSignal.timeout(8000) });
+      res = await fetchImpl(url, { headers: { accept: 'text/html', 'user-agent': 'WasteWarriorBidding/1.0 (waste carrier check)' }, signal: AbortSignal.timeout(8000) });
     } catch {
       return { ...base, status: 'unavailable', tier: c.tier };
     }
