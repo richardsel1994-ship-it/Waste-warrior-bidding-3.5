@@ -70,6 +70,7 @@
     const link = (href, text, cls) => h('a', { href, text, class: (cls || '') + (route === href ? ' active' : '') });
     $nav.replaceChildren(
       link('#/', 'Browse'),
+      link('#/haulers', 'Haulers'),
       ...(state.user ? [
         link('#/dashboard', 'My activity'),
         link('#/post', 'Post a job', 'nav-cta'),
@@ -406,6 +407,10 @@
             }
           });
           panel.append(form, err);
+          if (state.user && !(state.user.carrier && state.user.carrier.verified)) {
+            panel.append(h('div', { class: 'notice warn' }, 'Add your waste carrier number so customers can see you’re registered. ',
+              h('a', { href: '#/haulers', text: 'Add it now' })));
+          }
         }
       } else if (l.status === 'closed') {
         if (l.isSeller) panel.append(acceptBlock(l));
@@ -418,7 +423,9 @@
       } else panel.append(h('div', { class: 'notice warn', text: 'Bidding closed with no bids.' }));
 
       panel.append(h('div', {}, h('strong', { text: 'Bids (lowest first)' }),
-        l.bids.length ? h('ul', { class: 'bids' }, ...l.bids.map((b) => h('li', {}, h('span', { text: b.bidder }), h('span', { text: money(b.amountCents) }))))
+        l.bids.length ? h('ul', { class: 'bids' }, ...l.bids.map((b) => h('li', {},
+          h('span', { class: 'bidder' }, h('span', { text: b.bidder }), carrierBadge(b.carrier)),
+          h('span', { text: money(b.amountCents) }))))
           : h('p', { class: 'muted', text: 'No bids yet. Be the first!' })));
 
       const fact = (k, v) => v && h('div', {}, h('dt', { text: k }), h('dd', { text: v }));
@@ -499,6 +506,136 @@
     }, 6000);
   }
 
+  // ---------- haulers & waste carrier checks ----------
+  function carrierBadge(c) {
+    if (!c) return h('span', { class: 'reg none', text: 'No carrier number' });
+    if (c.verified) return h('a', { class: 'reg ok', href: c.registerUrl, target: '_blank', rel: 'noopener', title: `Waste carrier ${c.number}`, text: '✔ Registered carrier' });
+    return h('span', { class: 'reg none', text: 'Not verified' });
+  }
+  const fmtDate = (iso) => (iso ? new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '');
+  const SEARCH_URL = 'https://environment.data.gov.uk/public-register/view/search-waste-carriers-brokers';
+
+  function resultBox(r) {
+    const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener', text });
+    const box = (cls, title, ...kids) => h('div', { class: 'check-result ' + cls, role: 'status' }, h('strong', { text: title }), ...kids);
+    switch (r.status) {
+      case 'registered':
+        return box('ok', `✔ ${r.number} is a registered waste carrier`,
+          h('dl', { class: 'facts' },
+            r.name && h('div', {}, h('dt', { text: 'Business name' }), h('dd', { text: r.name })),
+            h('div', {}, h('dt', { text: 'Registered as' }), h('dd', { text: r.registeredAs || r.tier })),
+            r.expiresOn && h('div', {}, h('dt', { text: 'Expires' }), h('dd', { text: fmtDate(r.expiresOn) }))),
+          h('p', { class: 'hint', text: 'Make sure the business name matches the person or company collecting your waste.' }),
+          link(r.registerUrl, 'View the official record ↗'));
+      case 'expired':
+        return box('bad', `✖ ${r.number} has expired`,
+          h('p', { text: `${r.name ? r.name + '’s' : 'This'} registration ran out on ${fmtDate(r.expiresOn)}. Don’t hand waste to a carrier whose registration has expired.` }),
+          link(r.registerUrl, 'View the official record ↗'));
+      case 'not_found':
+        return box('bad', `✖ ${r.number} is not on the register`,
+          h('p', { text: 'The Environment Agency has no record of this number. Ask the hauler to check it, or search the register by business name.' }),
+          link(SEARCH_URL, 'Search the register by name ↗'));
+      case 'other_region':
+        return box('warn', `This looks like a ${r.region} registration`,
+          h('p', { text: `Carriers in ${r.region} are registered with ${r.registerName}, not the Environment Agency. Check this number on the ${r.registerName} public register.` }));
+      case 'unavailable':
+        return box('warn', 'The register couldn’t be reached',
+          h('p', { text: 'Try again in a few minutes, or check the number yourself on the official register.' }),
+          link(SEARCH_URL, 'Open the Environment Agency register ↗'));
+      default:
+        return box('bad', 'That isn’t a waste carrier number',
+          h('p', { text: 'English and Welsh numbers start CBDU (upper tier) or CBDL (lower tier) followed by digits, e.g. CBDU123456.' }));
+    }
+  }
+
+  async function viewHaulers() {
+    document.title = 'Haulers · Waste Warrior';
+    const result = h('div');
+    const input = h('input', { name: 'number', id: 'carrier-number', placeholder: 'e.g. CBDU123456', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', maxlength: 20, 'aria-label': 'Waste carrier number' });
+    const checkForm = h('form', { class: 'check-row', novalidate: true }, input, h('button', { class: 'btn', type: 'submit', text: 'Check number' }));
+    checkForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!input.value.trim()) { input.focus(); return; }
+      const btn = checkForm.querySelector('button'); btn.disabled = true; btn.textContent = 'Checking…';
+      result.replaceChildren();
+      try { result.replaceChildren(resultBox((await api('GET', `/api/carriers/check?number=${encodeURIComponent(input.value)}`)).result)); }
+      catch (ex) { result.replaceChildren(h('div', { class: 'err', text: ex.message })); }
+      btn.disabled = false; btn.textContent = 'Check number';
+    });
+
+    const list = h('div', { class: 'haulers' }, h('div', { class: 'loading', text: 'Loading…' }));
+    const mine = h('div');
+
+    function drawMine() {
+      if (!state.user) {
+        mine.replaceChildren(h('div', { class: 'panel' },
+          h('h2', { text: 'Do you collect waste?' }),
+          h('p', { class: 'muted', text: 'Add your waste carrier number to appear here and get a “Registered carrier” badge on every bid you place.' }),
+          h('a', { class: 'btn', href: '#/register', text: 'Sign up to bid on jobs' })));
+        return;
+      }
+      const c = state.user.carrier;
+      const err = h('div', { class: 'err', role: 'alert' });
+      const num = h('input', { name: 'number', id: 'my-carrier', value: c ? c.number : '', placeholder: 'e.g. CBDU123456', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', maxlength: 20 });
+      const f = h('form', { class: 'panel', novalidate: true },
+        h('h2', { text: 'Your waste carrier number' }),
+        c && c.verified
+          ? h('div', { class: 'notice', text: `✔ Verified on the Environment Agency register${c.name ? ' as ' + c.name : ''}${c.expiresOn ? `, valid until ${fmtDate(c.expiresOn)}` : ''}.` })
+          : h('p', { class: 'muted', text: 'We check your number with the Environment Agency before it shows on your profile and bids.' }),
+        h('label', { for: 'my-carrier' }, 'Waste carrier number', num),
+        err,
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn', type: 'submit', text: c ? 'Update and re-check' : 'Verify and save' }),
+          c && h('button', { class: 'btn secondary', type: 'button', text: 'Remove', onclick: () => save('') })));
+      async function save(value) {
+        err.textContent = '';
+        f.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        try {
+          const { user } = await api('PUT', '/api/me/carrier', { number: value });
+          state.user = user;
+          toast(value ? 'Waste carrier number verified' : 'Waste carrier number removed');
+          drawMine(); loadList();
+        } catch (ex) {
+          err.textContent = ex.message;
+          f.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+        }
+      }
+      f.addEventListener('submit', (e) => { e.preventDefault(); save(num.value); });
+      mine.replaceChildren(f);
+    }
+
+    async function loadList() {
+      try {
+        const { haulers } = await api('GET', '/api/haulers');
+        list.replaceChildren(...(haulers.length
+          ? haulers.map((x) => h('div', { class: 'hauler' },
+            h('div', { class: 'avatar', 'aria-hidden': 'true', text: x.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() }),
+            h('div', { class: 'grow' },
+              h('b', { text: x.name }),
+              h('span', { class: 'muted', text: [x.carrier.name && x.carrier.name.toUpperCase() !== x.name.toUpperCase() ? x.carrier.name : '', `${x.jobs} job${x.jobs === 1 ? '' : 's'} done`].filter(Boolean).join(' · ') }),
+              h('span', { class: 'regno' }, 'Carrier ', h('a', { href: x.carrier.registerUrl, target: '_blank', rel: 'noopener', text: x.carrier.number }),
+                x.carrier.expiresOn ? ` · valid to ${fmtDate(x.carrier.expiresOn)}` : '')),
+            h('span', { class: 'reg ok', text: '✔ Registered' })))
+          : [h('div', { class: 'empty' }, h('p', { text: 'No haulers have verified their waste carrier number yet.' }))]));
+      } catch (e) { list.replaceChildren(h('div', { class: 'err', text: e.message })); }
+    }
+
+    $main.replaceChildren(
+      h('h1', { text: 'Haulers' }),
+      h('p', { class: 'muted lead', text: 'Anyone who takes your waste away must be a registered waste carrier. If your waste is dumped by an unregistered carrier, you can be fined too, so check before you pay.' }),
+      h('section', { class: 'panel' },
+        h('h2', { text: 'Check a waste carrier number' }),
+        h('p', { class: 'muted', text: 'We look the number up live on the Environment Agency public register.' }),
+        checkForm, result,
+        h('dl', { class: 'tiers' },
+          h('dt', { text: 'CBDU…' }), h('dd', { text: 'Upper tier. Needed by anyone who collects other people’s waste for a living.' }),
+          h('dt', { text: 'CBDL…' }), h('dd', { text: 'Lower tier. Only for businesses carrying their own low-risk waste, so not enough for clearance jobs.' }))),
+      h('section', { class: 'block' }, h('h2', { text: 'Registered haulers on Waste Warrior' }), list),
+      h('section', { class: 'block' }, mine));
+    drawMine();
+    await loadList();
+  }
+
   async function viewDashboard() {
     if (!requireLogin()) return;
     $main.replaceChildren(h('div', { class: 'loading', text: 'Loading…' }));
@@ -550,6 +687,7 @@
     if (path === '/reset-password') return recoveryView('reset', query.get('token') || '');
     if (path === '/post') return viewPost();
     if (path === '/dashboard') return viewDashboard();
+    if (path === '/haulers') return viewHaulers();
     const m = path.match(/^\/listing\/(\d+)$/);
     if (m) return viewListing(m[1], query);
     $main.replaceChildren(h('div', { class: 'empty' }, h('h2', { text: 'Page not found' }), h('a', { class: 'btn', href: '#/', text: 'Go home' })));

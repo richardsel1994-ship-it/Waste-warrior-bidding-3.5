@@ -10,6 +10,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const { openDb, tx } = require('./db');
+const { createCarrierChecker } = require('./carrier');
 
 const CATEGORIES = ['Household', 'Garden', 'Furniture', 'Appliances', 'Building rubble', 'Mixed recycling', 'Commercial'];
 const LOAD_SIZES = ['Single item', 'Quarter van', 'Half van', 'Full van', 'Skip-sized'];
@@ -57,6 +58,7 @@ function createApp(opts = {}) {
   }
   if (!config.stripe && config.stripeKey) config.stripe = require('stripe')(config.stripeKey);
 
+  const carriers = opts.carrierChecker || createCarrierChecker();
   const db = openDb(config.dataDir);
   const uploadDir = path.join(config.dataDir, 'uploads');
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -141,6 +143,25 @@ function createApp(opts = {}) {
     return out;
   }
 
+  // A hauler's waste carrier registration as shown to other people.
+  const RECHECK_MS = 7 * DAY_MS;
+  function carrierInfo(u) {
+    if (!u || !u.carrier_number) return null;
+    let status = u.carrier_status;
+    if (status === 'registered' && u.carrier_expires && Date.parse(`${u.carrier_expires}T23:59:59Z`) < now()) status = 'expired';
+    return {
+      number: u.carrier_number, status, verified: status === 'registered',
+      name: u.carrier_name, tier: u.carrier_tier, expiresOn: u.carrier_expires, checkedAt: u.carrier_checked_at,
+      registerUrl: `https://environment.data.gov.uk/public-register/waste-carriers-brokers/registration/${encodeURIComponent(u.carrier_number)}`,
+    };
+  }
+  function saveCarrier(userId, r) {
+    run(`UPDATE users SET carrier_number = ?, carrier_status = ?, carrier_name = ?, carrier_tier = ?, carrier_expires = ?, carrier_checked_at = ? WHERE id = ?`,
+      r.number, r.status, r.name || '', r.tier || '', r.expiresOn || '', now(), userId);
+  }
+  const USER_COLS = 'id, email, name, carrier_number, carrier_status, carrier_name, carrier_tier, carrier_expires, carrier_checked_at';
+  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u) } : null);
+
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
   function auth(required) {
@@ -150,7 +171,7 @@ function createApp(opts = {}) {
       if (token) {
         try {
           const { sub } = jwt.verify(token, config.jwtSecret);
-          req.user = one('SELECT id, email, name FROM users WHERE id = ?', sub) || null;
+          req.user = one(`SELECT ${USER_COLS} FROM users WHERE id = ?`, sub) || null;
         } catch { /* invalid token: treat as logged out */ }
       }
       if (required && !req.user) return next(new HttpError(401, 'Please log in first'));
@@ -202,7 +223,7 @@ function createApp(opts = {}) {
     const hash = await bcrypt.hash(password, 10);
     const r = run('INSERT INTO users (email, name, password_hash, created_at) VALUES (?, ?, ?, ?)', e, n, hash, now());
     setSession(res, Number(r.lastInsertRowid));
-    res.status(201).json({ user: { id: Number(r.lastInsertRowid), email: e, name: n } });
+    res.status(201).json({ user: { id: Number(r.lastInsertRowid), email: e, name: n, carrier: null } });
   }));
 
   app.post('/api/auth/login', authLimiter, wrap(async (req, res) => {
@@ -211,7 +232,7 @@ function createApp(opts = {}) {
     const ok = u && typeof password === 'string' && await bcrypt.compare(password, u.password_hash);
     if (!ok) throw new HttpError(401, 'Wrong email or password');
     setSession(res, u.id);
-    res.json({ user: { id: u.id, email: u.email, name: u.name } });
+    res.json({ user: meJson(one(`SELECT ${USER_COLS} FROM users WHERE id = ?`, u.id)) });
   }));
 
   app.post('/api/auth/forgot-password', authLimiter, wrap(async (req, res) => {
@@ -257,7 +278,7 @@ function createApp(opts = {}) {
   }));
 
   app.post('/api/auth/logout', (req, res) => { res.clearCookie('token'); res.json({ ok: true }); });
-  app.get('/api/me', auth(false), (req, res) => res.json({ user: req.user }));
+  app.get('/api/me', auth(false), (req, res) => res.json({ user: meJson(req.user) }));
 
   // ---------- config for the client ----------
   app.get('/api/config', (req, res) => res.json({
@@ -355,9 +376,14 @@ function createApp(opts = {}) {
     if (!l) throw new HttpError(404, 'Job not found');
     l = settle(l);
     const out = publicListing(l, req.user && req.user.id);
-    out.bids = q(`SELECT b.amount_cents AS amountCents, b.created_at AS createdAt, u.name AS bidder
+    out.bids = q(`SELECT b.amount_cents AS amountCents, b.created_at AS createdAt, u.name AS bidder,
+                         u.carrier_number, u.carrier_status, u.carrier_name, u.carrier_tier, u.carrier_expires, u.carrier_checked_at
                   FROM bids b JOIN users u ON u.id = b.user_id WHERE b.listing_id = ?
-                  ORDER BY b.amount_cents ASC, b.id ASC LIMIT 20`, l.id);
+                  ORDER BY b.amount_cents ASC, b.id ASC LIMIT 20`, l.id)
+      .map((b) => {
+        const c = carrierInfo(b);
+        return { amountCents: b.amountCents, createdAt: b.createdAt, bidder: b.bidder, carrier: c && { number: c.number, verified: c.verified, registerUrl: c.registerUrl } };
+      });
     res.json({ listing: out, serverTime: now() });
   });
 
@@ -381,6 +407,51 @@ function createApp(opts = {}) {
       if (l.ends_at - now() < 120_000) run('UPDATE listings SET ends_at = ? WHERE id = ?', now() + 120_000, id);
     });
     res.status(201).json({ ok: true });
+  });
+
+  // ---------- haulers and waste carrier checks ----------
+  const checkLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, legacyHeaders: false });
+
+  // Anyone can check a number against the Environment Agency register.
+  app.get('/api/carriers/check', checkLimiter, wrap(async (req, res) => {
+    res.json({ result: await carriers.check(req.query.number) });
+  }));
+
+  // A hauler adds (or removes) their own waste carrier number. It is only saved once the register confirms it.
+  app.put('/api/me/carrier', auth(true), checkLimiter, wrap(async (req, res) => {
+    const number = String(req.body && req.body.number || '').trim();
+    if (!number) {
+      run("UPDATE users SET carrier_number = '', carrier_status = '', carrier_name = '', carrier_tier = '', carrier_expires = '', carrier_checked_at = NULL WHERE id = ?", req.user.id);
+      return res.json({ user: meJson(one(`SELECT ${USER_COLS} FROM users WHERE id = ?`, req.user.id)) });
+    }
+    const r = await carriers.check(number);
+    const msgs = {
+      invalid: 'That isn’t a waste carrier number. English and Welsh numbers start CBDU or CBDL, e.g. CBDU123456.',
+      other_region: `This looks like a ${r.region} registration. At the moment we can only verify numbers on the Environment Agency register.`,
+      not_found: `${r.number} isn’t on the Environment Agency register. Check the number on your registration certificate.`,
+      expired: `${r.number} has expired on the register. Renew it with the Environment Agency, then add it again.`,
+      unavailable: 'We couldn’t reach the Environment Agency register just now. Please try again in a few minutes.',
+    };
+    if (r.status !== 'registered') throw new HttpError(r.status === 'unavailable' ? 503 : 400, msgs[r.status] || 'That number could not be verified');
+    const taken = one('SELECT id FROM users WHERE carrier_number = ? AND id != ?', r.number, req.user.id);
+    if (taken) throw new HttpError(409, 'That waste carrier number is already linked to another account. Contact support if it’s yours.');
+    saveCarrier(req.user.id, r);
+    res.json({ user: meJson(one(`SELECT ${USER_COLS} FROM users WHERE id = ?`, req.user.id)) });
+  }));
+
+  // Haulers with a verified registration, most jobs first.
+  app.get('/api/haulers', (req, res) => {
+    const rows = q(`SELECT ${USER_COLS},
+        (SELECT COUNT(*) FROM listings l WHERE l.winner_id = users.id AND l.status = 'paid') AS jobs
+      FROM users WHERE carrier_number != '' AND carrier_status = 'registered'
+      ORDER BY jobs DESC, carrier_checked_at DESC LIMIT 200`);
+    // Re-check registrations that haven't been looked at for a week, in the background.
+    for (const u of rows.filter((r) => !r.carrier_checked_at || r.carrier_checked_at < now() - RECHECK_MS).slice(0, 5)) {
+      carriers.check(u.carrier_number).then((r) => { if (r.status !== 'unavailable') saveCarrier(u.id, r); }).catch(() => {});
+    }
+    const haulers = rows.map((u) => ({ name: u.name, jobs: u.jobs, carrier: carrierInfo(u) }))
+      .filter((h) => h.carrier.verified);
+    res.json({ haulers });
   });
 
   // ---------- accepting the winner and paying ----------

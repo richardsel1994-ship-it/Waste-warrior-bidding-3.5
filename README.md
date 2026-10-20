@@ -7,6 +7,7 @@ A reverse-auction marketplace for waste removal. A customer posts a job, local p
 - **Reverse bidding** – each bid must undercut the lowest by at least 50p, countdowns, bid history, anti-sniping (late bids extend bidding by 2 minutes)
 - **Accept and pay** – when bidding closes the customer accepts the lowest bid and pays by card through Stripe Checkout (or declines it); confirmed by webhook and by direct verification on return
 - **Platform fee** – 10% added to the customer's price at checkout and 10% taken from the provider's bid (set `PLATFORM_FEE_PERCENT` to change it). Each Stripe payment records the provider's payout and your fee in its metadata
+- **Haulers & waste carrier checks** – a Haulers page (`#/haulers`) where anyone can check a waste carrier number live against the Environment Agency public register, and haulers verify their own number (CBDU/CBDL) to get a “Registered carrier” badge on their bids and a place on the haulers list. Registrations are re-checked weekly
 - **Accounts** – sign up / log in (bcrypt-hashed passwords, httpOnly cookie sessions)
 - **Dashboard** – providers track their bids (lowest/undercut/won), customers track their jobs
 - Prices in pounds (GBP). Search, waste-type filters and sorting; responsive, dark-mode and keyboard friendly
@@ -51,4 +52,4 @@ test/     API tests (npm test)
 
 ## Before a real launch
 
-Terms of service and privacy policy, email verification and password reset, moderation/reporting, checking providers hold a waste carrier licence, confirming a job is done before the provider is paid, and off-site backups of `/data`.
+Terms of service and privacy policy, email verification and password reset, moderation/reporting, deciding whether to require a verified waste carrier number before providers can bid, confirming a job is done before the provider is paid, and off-site backups of `/data`.

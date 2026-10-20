@@ -200,3 +200,31 @@ main > * { animation: rise .35s ease both; }
 .panel .facts div { background: var(--bg); border: 0; }
 .facts dt { color: var(--muted); font-size: .8rem; }
 .facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* haulers & waste carrier checks */
+.lead { font-size: 1.02rem; max-width: 70ch; margin: -4px 0 20px; }
+.check-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.check-row input { flex: 1 1 220px; width: auto; text-transform: uppercase; letter-spacing: .03em; }
+.check-result { border-radius: 12px; padding: 14px 16px; display: grid; gap: 8px; border: 1px solid var(--line); }
+.check-result p { margin: 0; }
+.check-result .facts { margin: 0; }
+.check-result.ok { background: var(--ok-soft); border-color: var(--brand); }
+.check-result.bad { background: var(--danger-soft); border-color: var(--danger); }
+.check-result.warn { background: #fff4d6; border-color: #e0b84a; color: #5a4300; }
+@media (prefers-color-scheme: dark) { .check-result.warn { background: #3a3012; border-color: #8a6d1d; color: #ffe08a; } }
+.tiers { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: .9rem; }
+.tiers dt { font-weight: 700; }
+.tiers dd { margin: 0; color: var(--muted); }
+.haulers { display: grid; gap: 10px; }
+.hauler { display: flex; align-items: center; gap: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.hauler .grow { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.hauler .avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--brand-soft); color: var(--brand-dark); display: grid; place-items: center; font-weight: 800; flex: none; }
+@media (prefers-color-scheme: dark) { .hauler .avatar { color: var(--text); } }
+.regno { font-size: .85rem; color: var(--muted); }
+.reg { font-size: .75rem; font-weight: 700; padding: 2px 8px; border-radius: 99px; white-space: nowrap; text-decoration: none; }
+.reg.ok { background: var(--brand-soft); color: var(--brand-dark); }
+@media (prefers-color-scheme: dark) { .reg.ok { color: var(--text); } }
+.reg.none { background: var(--bg); color: var(--muted); font-weight: 600; }
+.bids .bidder { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
+@media (max-width: 520px) { .hauler { flex-wrap: wrap; } }

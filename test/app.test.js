@@ -234,3 +234,76 @@ test('older databases are upgraded to the job schema', () => {
   assert.ok(cols.includes('load_size') && cols.includes('access_notes') && cols.includes('collect_by'));
   assert.ok(!cols.includes('qty_kg'));
 });
+
+// ---------- waste carrier checks ----------
+const { createCarrierChecker } = require('../server/carrier');
+const recordPage = (num, name, expiry) => `<html><body><h1>Registration ${num}</h1>
+  <dl><dt>Registration number</dt><dd>${num}</dd><dt>Business name</dt><dd>${name}</dd>
+  <dt>Registered as</dt><dd>Carrier, Broker, Dealer - Upper Tier</dd>
+  <dt>Registration date</dt><dd>20/09/2024</dd><dt>Expiry date</dt><dd>${expiry}</dd></dl></body></html>`;
+const fakeRegister = async (url) => {
+  const num = decodeURIComponent(url.split('/').pop());
+  if (num === 'CBDU111') return new Response(recordPage(num, 'GOOD HAULAGE LTD', '17/10/2099'), { status: 200 });
+  if (num === 'CBDU222') return new Response(recordPage(num, 'OLD HAULAGE LTD', '01/01/2020'), { status: 200 });
+  if (num === 'CBDU999') throw new Error('network down');
+  return new Response('Not found', { status: 404 });
+};
+
+test('carrier checker reads the register record and classifies numbers', async () => {
+  const c = createCarrierChecker({ fetchImpl: fakeRegister });
+  const ok = await c.check(' cbdu 111 ');
+  assert.equal(ok.status, 'registered');
+  assert.equal(ok.number, 'CBDU111');
+  assert.equal(ok.name, 'GOOD HAULAGE LTD');
+  assert.equal(ok.expiresOn, '2099-10-17');
+  assert.match(ok.registeredAs, /Upper Tier/);
+  assert.equal((await c.check('CBDU222')).status, 'expired');
+  assert.equal((await c.check('CBDU333')).status, 'not_found');
+  assert.equal((await c.check('CBDU999')).status, 'unavailable');
+  assert.equal((await c.check('hello')).status, 'invalid');
+  assert.equal((await c.check('WCR/R/1234567')).status, 'other_region');
+});
+
+test('haulers: verify a number, show it on bids and the haulers list', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-c-'));
+  const a = createApp({ dataDir: d, jwtSecret: 't', demoPayments: true, carrierChecker: createCarrierChecker({ fetchImpl: fakeRegister }) });
+  const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
+  const b = `http://localhost:${srv.address().port}`;
+  const call = async (method, url, body, cookie) => {
+    const res = await fetch(b + url, { method, headers: { ...(cookie ? { cookie } : {}), ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, json: await res.json(), cookie: (res.headers.get('set-cookie') || '').split(';')[0] };
+  };
+  try {
+    const pub = await call('GET', '/api/carriers/check?number=CBDU111');
+    assert.equal(pub.json.result.status, 'registered');
+
+    const cust = await call('POST', '/api/auth/register', { email: 'c@x.com', name: 'Cara Customer', password: 'password123' });
+    const haul = await call('POST', '/api/auth/register', { email: 'h@x.com', name: 'Harry Hauler', password: 'password123' });
+    assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU333' }, haul.cookie)).status, 400);
+    assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU222' }, haul.cookie)).status, 400);
+    assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU999' }, haul.cookie)).status, 503);
+    const saved = await call('PUT', '/api/me/carrier', { number: 'cbdu111' }, haul.cookie);
+    assert.equal(saved.status, 200);
+    assert.equal(saved.json.user.carrier.verified, true);
+    assert.equal((await call('GET', '/api/me', null, haul.cookie)).json.user.carrier.number, 'CBDU111');
+    assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU111' }, cust.cookie)).status, 409);
+
+    const list = await call('GET', '/api/haulers');
+    assert.equal(list.json.haulers.length, 1);
+    assert.equal(list.json.haulers[0].name, 'Harry Hauler');
+    assert.equal(list.json.haulers[0].carrier.name, 'GOOD HAULAGE LTD');
+    assert.equal(list.json.haulers[0].carrier.email, undefined);
+
+    const f = listingForm();
+    const created = await fetch(b + '/api/listings', { method: 'POST', headers: { cookie: cust.cookie }, body: f }).then((r) => r.json());
+    assert.equal((await call('POST', `/api/listings/${created.id}/bids`, { amount: 90 }, haul.cookie)).status, 201);
+    const job = await call('GET', `/api/listings/${created.id}`);
+    assert.deepEqual(job.json.listing.bids[0].carrier.verified, true);
+    assert.equal(job.json.listing.bids[0].carrier.number, 'CBDU111');
+
+    assert.equal((await call('PUT', '/api/me/carrier', { number: '' }, haul.cookie)).json.user.carrier, null);
+    assert.equal((await call('GET', '/api/haulers')).json.haulers.length, 0);
+  } finally {
+    srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
+  }
+});
