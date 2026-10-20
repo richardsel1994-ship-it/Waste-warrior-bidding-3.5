@@ -18,8 +18,8 @@
   <g transform="translate(330 80)" filter="url(#sh)">
     <rect width="150" height="96" rx="18" fill="#fff"/>
     <path d="M24 -0 l-14 -18 28 0z" fill="none"/>
-    <text x="75" y="42" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" font-weight="600" fill="#5c6b61">Highest bid</text>
-    <text x="75" y="76" text-anchor="middle" font-family="system-ui,sans-serif" font-size="32" font-weight="800" fill="#0f7a45">$1,240</text>
+    <text x="75" y="42" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" font-weight="600" fill="#5c6b61">Lowest bid</text>
+    <text x="75" y="76" text-anchor="middle" font-family="system-ui,sans-serif" font-size="32" font-weight="800" fill="#0f7a45">£85</text>
   </g>
   <g transform="translate(95 60)" filter="url(#sh)">
     <circle cx="60" cy="60" r="60" fill="#fff"/>

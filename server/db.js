@@ -21,8 +21,12 @@ function openDb(dataDir) {
       title TEXT NOT NULL,
       description TEXT NOT NULL,
       category TEXT NOT NULL,
-      qty_kg REAL NOT NULL,
+      load_size TEXT NOT NULL DEFAULT '',
       location TEXT NOT NULL,
+      address TEXT NOT NULL DEFAULT '',
+      access_notes TEXT NOT NULL DEFAULT '',
+      collect_from TEXT NOT NULL DEFAULT '',
+      collect_by TEXT NOT NULL DEFAULT '',
       start_price_cents INTEGER NOT NULL,
       ends_at INTEGER NOT NULL,
       images TEXT NOT NULL DEFAULT '[]',
@@ -42,7 +46,24 @@ function openDb(dataDir) {
     CREATE INDEX IF NOT EXISTS idx_bids_listing ON bids(listing_id, amount_cents DESC);
     CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status, ends_at);
   `);
+  migrate(db);
   return db;
+}
+
+// Bring databases made before listings became jobs up to the current schema.
+function migrate(db) {
+  const cols = db.prepare('PRAGMA table_info(listings)').all().map((c) => c.name);
+  const add = {
+    load_size: "TEXT NOT NULL DEFAULT ''",
+    address: "TEXT NOT NULL DEFAULT ''",
+    access_notes: "TEXT NOT NULL DEFAULT ''",
+    collect_from: "TEXT NOT NULL DEFAULT ''",
+    collect_by: "TEXT NOT NULL DEFAULT ''",
+  };
+  for (const [name, type] of Object.entries(add)) {
+    if (!cols.includes(name)) db.exec(`ALTER TABLE listings ADD COLUMN ${name} ${type}`);
+  }
+  if (cols.includes('qty_kg')) db.exec('ALTER TABLE listings DROP COLUMN qty_kg');
 }
 
 // Run fn inside an immediate transaction so concurrent bids serialize.

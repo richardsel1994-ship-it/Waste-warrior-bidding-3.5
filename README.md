@@ -1,13 +1,14 @@
 # Waste Warrior Bidding
 
-A marketplace where people auction recyclable waste to collectors.
+A reverse-auction marketplace for waste removal. A customer posts a job, local providers bid the price **down**, and the lowest bid wins.
 
+- **Jobs** – waste type, how much (single item up to skip-sized), collection dates, access notes, up to 4 photos and a maximum budget
+- **Private address** – bidders only see the town or postcode area; the full address and contact details go to the winning provider once the customer has paid
+- **Reverse bidding** – each bid must undercut the lowest by at least 50p, countdowns, bid history, anti-sniping (late bids extend bidding by 2 minutes)
+- **Accept and pay** – when bidding closes the customer accepts the lowest bid and pays by card through Stripe Checkout (or declines it); confirmed by webhook and by direct verification on return
 - **Accounts** – sign up / log in (bcrypt-hashed passwords, httpOnly cookie sessions)
-- **Photo upload** – up to 4 photos per listing (JPEG/PNG/WebP, 5 MB each, verified by file signature)
-- **Live auctions** – minimum increments, countdowns, bid history, anti-sniping (late bids extend the auction by 2 minutes)
-- **Payments** – the winner pays by card through Stripe Checkout; confirmed by webhook and by direct verification on return
-- **Dashboard** – track your bids (leading/outbid/won) and your listings
-- Search, category filters and sorting; responsive, dark-mode and keyboard friendly
+- **Dashboard** – providers track their bids (lowest/undercut/won), customers track their jobs
+- Prices in pounds (GBP). Search, waste-type filters and sorting; responsive, dark-mode and keyboard friendly
 
 ## Run locally
 
@@ -18,10 +19,10 @@ npm install
 DEMO_PAYMENTS=1 npm start
 ```
 
-Open http://localhost:3000. With `DEMO_PAYMENTS=1` the "Pay" button simulates a payment so you can try the whole flow without Stripe. Other settings are listed in `.env.example` (set them as environment variables).
+Open http://localhost:3000. With `DEMO_PAYMENTS=1` the "Accept and pay" button simulates a payment so you can try the whole flow without Stripe. Other settings are listed in `.env.example` (set them as environment variables).
 
 ```sh
-npm run seed   # optional: demo listings for development (refuses to run in production)
+npm run seed   # optional: demo jobs for development (refuses to run in production)
 npm test
 ```
 
@@ -33,7 +34,7 @@ npm test
 
 Test card: `4242 4242 4242 4242`, any future date, any CVC.
 
-> Payments currently go to **your** Stripe account. Paying sellers directly (or taking a platform fee) needs Stripe Connect, plus decisions about KYC and terms — not included.
+> Payments currently go to **your** Stripe account. Paying providers directly (or taking a platform fee) needs Stripe Connect, plus decisions about KYC and terms — not included.
 
 ## Deploy
 
@@ -49,4 +50,4 @@ test/     API tests (npm test)
 
 ## Before a real launch
 
-Terms of service and privacy policy, email verification and password reset, moderation/reporting, handling of regulated waste types, and off-site backups of `/data`.
+Terms of service and privacy policy, email verification and password reset, moderation/reporting, checking providers hold a waste carrier licence, confirming a job is done before the provider is paid, and off-site backups of `/data`.
