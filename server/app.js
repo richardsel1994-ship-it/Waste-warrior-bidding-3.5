@@ -57,6 +57,8 @@ function createApp(opts = {}) {
     proPriceId: opts.proPriceId !== undefined ? opts.proPriceId : process.env.STRIPE_PRO_PRICE_ID,
     proFeePercent: Number(opts.proFeePercent ?? process.env.PRO_FEE_PERCENT ?? 6),
     proPricePence: Number(opts.proPricePence ?? process.env.PRO_PRICE_PENCE ?? 499),
+    // Accounts that can see and manage everything on the site (comma-separated emails).
+    adminEmails: String(opts.adminEmails ?? process.env.ADMIN_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
   };
   if (!(config.feePercent >= 0 && config.feePercent < 50)) throw new Error('PLATFORM_FEE_PERCENT must be between 0 and 49');
   if (!(config.plusFeePercent >= 0 && config.plusFeePercent <= config.feePercent)) throw new Error('PLUS_FEE_PERCENT must be between 0 and PLATFORM_FEE_PERCENT');
@@ -198,7 +200,8 @@ function createApp(opts = {}) {
     + 'stripe_customer_id, plus_subscription_id, plus_status, plus_until, plus_cancel_at_end, plus_session_id, '
     + 'pro_subscription_id, pro_status, pro_until, pro_cancel_at_end, pro_session_id';
   const planJson = (u, p) => ({ active: onPlan(u, p), status: u[`${p}_status`] || null, until: u[`${p}_until`] || null, cancelAtEnd: Boolean(u[`${p}_cancel_at_end`]) });
-  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u), plus: planJson(u, 'plus'), pro: planJson(u, 'pro') } : null);
+  const isAdmin = (u) => Boolean(u && config.adminEmails.includes(String(u.email).toLowerCase()));
+  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u), plus: planJson(u, 'plus'), pro: planJson(u, 'pro'), admin: isAdmin(u) || undefined } : null);
 
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -436,6 +439,8 @@ function createApp(opts = {}) {
   app.get('/api/listings/:id', auth(false), (req, res) => {
     let l = one('SELECT * FROM listings WHERE id = ?', Number(req.params.id));
     if (!l) throw new HttpError(404, 'Job not found');
+    // Removed jobs are only visible to the customer who posted them and to admins.
+    if (l.status === 'removed' && !(req.user && (req.user.id === l.seller_id || isAdmin(req.user)))) throw new HttpError(404, 'Job not found');
     l = settle(l);
     const out = publicListing(l, req.user && req.user.id);
     out.bids = q(`SELECT b.amount_cents AS amountCents, b.created_at AS createdAt, u.name AS bidder,
@@ -526,6 +531,77 @@ function createApp(opts = {}) {
     app.post(`/api/${p}/cancel`, auth(true), wrap((req, res) => setCancel(req, res, true)));
     app.post(`/api/${p}/resume`, auth(true), wrap((req, res) => setCancel(req, res, false)));
   }
+
+  // ---------- admin ----------
+  const adminOnly = (req, res, next) => (isAdmin(req.user) ? next() : next(new HttpError(403, 'Admins only')));
+
+  // Fees actually earned (or due) on a job, using the percentages fixed at payment.
+  function jobFees(l) {
+    if (l.winning_bid_cents == null) return null;
+    return fees(l.winning_bid_cents, l.customer_fee_pct ?? config.feePercent, l.provider_fee_pct ?? config.feePercent);
+  }
+
+  app.get('/api/admin/overview', auth(true), adminOnly, (req, res) => {
+    const byStatus = Object.fromEntries(q('SELECT status, COUNT(*) AS n FROM listings GROUP BY status').map((r) => [r.status, r.n]));
+    const paid = q("SELECT * FROM listings WHERE status = 'paid'");
+    const users = q(`SELECT ${USER_COLS} FROM users`);
+    const plus = users.filter(isPlus).length, pro = users.filter(isPro).length;
+    res.json({
+      users: users.length,
+      haulersVerified: users.filter((u) => carrierInfo(u) && carrierInfo(u).verified).length,
+      jobs: byStatus,
+      paidJobs: paid.length,
+      jobValueCents: paid.reduce((t, l) => t + l.winning_bid_cents, 0),
+      feesEarnedCents: paid.reduce((t, l) => t + jobFees(l).platformCents, 0),
+      owedToHaulersCents: paid.reduce((t, l) => t + jobFees(l).providerPayoutCents, 0),
+      subscribers: { plus, pro },
+      monthlySubscriptionCents: plus * config.plusPricePence + pro * config.proPricePence,
+    });
+  });
+
+  app.get('/api/admin/jobs', auth(true), adminOnly, (req, res) => {
+    settleAllDue();
+    const rows = q(`SELECT l.*, s.name AS seller_name, s.email AS seller_email, w.name AS winner_name, w.email AS winner_email,
+        (SELECT COUNT(*) FROM bids b WHERE b.listing_id = l.id) AS bid_count
+      FROM listings l JOIN users s ON s.id = l.seller_id LEFT JOIN users w ON w.id = l.winner_id
+      ORDER BY l.created_at DESC LIMIT 300`);
+    res.json({
+      jobs: rows.map((l) => {
+        const f = jobFees(l);
+        return {
+          id: l.id, title: l.title, location: l.location, status: l.status, createdAt: l.created_at, endsAt: l.ends_at,
+          customer: { name: l.seller_name, email: l.seller_email },
+          hauler: l.winner_name ? { name: l.winner_name, email: l.winner_email } : null,
+          bids: l.bid_count, budgetCents: l.start_price_cents, winningBidCents: l.winning_bid_cents,
+          feesCents: f ? f.platformCents : null, haulerPayoutCents: f ? f.providerPayoutCents : null,
+        };
+      }),
+    });
+  });
+
+  app.get('/api/admin/users', auth(true), adminOnly, (req, res) => {
+    const rows = q(`SELECT ${USER_COLS}, created_at,
+        (SELECT COUNT(*) FROM listings l WHERE l.seller_id = users.id) AS jobs_posted,
+        (SELECT COUNT(*) FROM bids b WHERE b.user_id = users.id) AS bids_placed,
+        (SELECT COUNT(*) FROM listings l WHERE l.winner_id = users.id AND l.status = 'paid') AS jobs_won
+      FROM users ORDER BY created_at DESC LIMIT 500`);
+    res.json({
+      users: rows.map((u) => ({
+        id: u.id, name: u.name, email: u.email, createdAt: u.created_at, admin: isAdmin(u),
+        plus: isPlus(u), pro: isPro(u), carrier: carrierInfo(u),
+        jobsPosted: u.jobs_posted, bidsPlaced: u.bids_placed, jobsWon: u.jobs_won,
+      })),
+    });
+  });
+
+  // Take a job off the site. Paid jobs can't be removed here (refund them in Stripe first).
+  app.post('/api/admin/jobs/:id/remove', auth(true), adminOnly, (req, res) => {
+    const l = one('SELECT * FROM listings WHERE id = ?', Number(req.params.id));
+    if (!l) throw new HttpError(404, 'Job not found');
+    if (l.status === 'paid') throw new HttpError(409, 'This job has been paid for. Refund it in Stripe before removing it.');
+    run("UPDATE listings SET status = 'removed' WHERE id = ?", l.id);
+    res.json({ status: 'removed' });
+  });
 
   // ---------- haulers and waste carrier checks ----------
   const checkLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, legacyHeaders: false });

@@ -428,3 +428,43 @@ test('hauler pro: subscribed haulers have a lower fee taken from their winning b
     srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+test('admin: only admin accounts can see everything and remove jobs', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-adm-'));
+  const a = createApp({ dataDir: d, jwtSecret: 't', demoPayments: true, stripeKey: '', adminEmails: 'Boss@X.com' });
+  const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
+  const b = `http://localhost:${srv.address().port}`;
+  const call = async (method, url, cookie) => {
+    const res = await fetch(b + url, { method, headers: cookie ? { cookie } : {} });
+    return { status: res.status, json: await res.json() };
+  };
+  const reg = async (e, n) => {
+    const res = await fetch(b + '/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: e, name: n, password: 'password123' }) });
+    return { cookie: (res.headers.get('set-cookie') || '').split(';')[0], user: (await res.json()).user };
+  };
+  try {
+    const boss = await reg('boss@x.com', 'The Boss');
+    const cust = await reg('cust@x.com', 'A Customer');
+    assert.equal(boss.user.admin, true);
+    assert.equal(cust.user.admin, undefined);
+    assert.equal((await call('GET', '/api/admin/overview', cust.cookie)).status, 403);
+    assert.equal((await call('GET', '/api/admin/overview')).status, 401);
+
+    const created = await fetch(b + '/api/listings', { method: 'POST', headers: { cookie: cust.cookie }, body: listingForm() }).then((r) => r.json());
+    const o = await call('GET', '/api/admin/overview', boss.cookie);
+    assert.equal(o.status, 200);
+    assert.equal(o.json.users, 2);
+    assert.equal(o.json.jobs.open, 1);
+    const jobs = await call('GET', '/api/admin/jobs', boss.cookie);
+    assert.equal(jobs.json.jobs[0].customer.email, 'cust@x.com');
+    assert.equal((await call('GET', '/api/admin/users', boss.cookie)).json.users.length, 2);
+
+    assert.equal((await call('POST', `/api/admin/jobs/${created.id}/remove`, cust.cookie)).status, 403);
+    assert.equal((await call('POST', `/api/admin/jobs/${created.id}/remove`, boss.cookie)).status, 200);
+    assert.equal((await call('GET', '/api/listings')).json.listings.length, 0);
+    assert.equal((await call('GET', `/api/listings/${created.id}`)).status, 404);
+    assert.equal((await call('GET', `/api/listings/${created.id}`, cust.cookie)).json.listing.status, 'removed');
+  } finally {
+    srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
+  }
+});

@@ -240,3 +240,11 @@ main > * { animation: rise .35s ease both; }
 .plan-list { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; color: var(--muted); }
 .plan .hint { margin: 0; }
 .plus-status { display: grid; gap: 10px; }
+
+/* admin */
+.admin-stats { margin: 0 0 12px; }
+.table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--line); }
+.admin-table { min-width: 760px; font-size: .9rem; }
+.admin-table td { color: var(--text); font-weight: 400; white-space: normal; }
+.admin-table th[scope=row] { font-weight: 600; }
+.btn.sm { padding: 6px 12px; font-size: .85rem; border-radius: 8px; }
