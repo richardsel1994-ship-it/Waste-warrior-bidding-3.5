@@ -126,8 +126,15 @@ test('reverse bidding: lowest bid wins, customer accepts and pays', async () => 
   const co = await api('POST', `/api/listings/${id}/checkout`, { cookie: customer });
   assert.equal(co.status, 200);
   assert.match(co.json.url, /checkout\.stripe\.com/);
-  assert.equal(stripeCalls.at(-1).line_items[0].price_data.unit_amount, 7500);
-  assert.equal(stripeCalls.at(-1).line_items[0].price_data.currency, 'gbp');
+  // customer pays the bid plus a 10% fee; the provider is owed the bid minus 10%
+  const call = stripeCalls.at(-1);
+  assert.deepEqual(call.line_items.map((i) => i.price_data.unit_amount), [7500, 750]);
+  assert.equal(call.line_items[0].price_data.currency, 'gbp');
+  assert.equal(call.metadata.provider_payout_pence, '6750');
+  assert.equal(call.metadata.platform_fee_pence, '1500');
+  assert.equal(ended.json.listing.providerPayoutCents, 6750);
+  assert.equal(ended.json.listing.customerTotalCents, undefined);
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: customer })).json.listing.customerTotalCents, 8250);
 
   assert.equal((await api('POST', `/api/listings/${id}/verify-payment`, { cookie: p2 })).status, 403);
   const v = await api('POST', `/api/listings/${id}/verify-payment`, { cookie: customer });
