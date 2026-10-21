@@ -7,7 +7,6 @@
 @media (max-width: 520px) { .pp-nav a.pp-hide-sm { display: none; } }
 
 .pp-main { padding-bottom: 48px; }
-.hero.pp-hero { display: block; }
 .pp-hero h1 { max-width: 20ch; }
 .pp-hero p { max-width: 60ch; }
 .pp-live { margin: 18px 0 0; font-weight: 700; color: var(--hivis); }
@@ -66,3 +65,11 @@ details.problem { border-top: 1px solid var(--line); padding-top: 10px; display:
 details.problem summary { cursor: pointer; font-weight: 600; color: var(--muted); }
 details.problem[open] { display: grid; }
 details.problem textarea { margin-bottom: 8px; }
+
+/* pictures */
+.step-img { width: 100%; height: auto; border-radius: calc(var(--radius) - 2px); margin-bottom: 14px; display: block; }
+.pp-hero .hero-art { max-width: 520px; }
+.feature .ico img { width: 34px; height: 34px; }
+.trust li { display: inline-flex; align-items: center; gap: 7px; }
+.trust .ti { width: 18px; height: 18px; }
+.h-ico { width: 26px; height: 26px; display: inline-block; vertical-align: -4px; }

@@ -111,12 +111,12 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
   }
 
   const howItWorks = () => `<section class="block"><h2>How it works</h2><div class="steps pp-steps">
-    <div class="step"><div class="n">1</div><h3>Post your job</h3><p class="muted">Add photos, say what needs clearing, when it can be collected and the most you want to pay. It takes about two minutes and it’s free.</p></div>
-    <div class="step"><div class="n">2</div><h3>Haulers bid it down</h3><p class="muted">Local waste carriers compete for the job. Every new bid has to beat the lowest one, so the price only goes down.</p></div>
-    <div class="step"><div class="n">3</div><h3>Book and pay</h3><p class="muted">When bidding closes, book the lowest bid or a hauler with better reviews, and pay securely by card. The hauler is only paid once you confirm the collection.</p></div>
+    <div class="step"><img class="step-img" src="/img/step-post.svg" alt=""><div class="n">1</div><h3>Post your job</h3><p class="muted">Add photos, say what needs clearing, when it can be collected and the most you want to pay. It takes about two minutes and it’s free.</p></div>
+    <div class="step"><img class="step-img" src="/img/step-bid.svg" alt=""><div class="n">2</div><h3>Haulers bid it down</h3><p class="muted">Local waste carriers compete for the job. Every new bid has to beat the lowest one, so the price only goes down.</p></div>
+    <div class="step"><img class="step-img" src="/img/step-pay.svg" alt=""><div class="n">3</div><h3>Book and pay</h3><p class="muted">When bidding closes, book the lowest bid or a hauler with better reviews, and pay securely by card. The hauler is only paid once you confirm the collection.</p></div>
   </div></section>`;
 
-  const dutyOfCare = () => `<section class="pp-callout"><h2>Don’t get fined for someone else’s fly-tipping</h2>
+  const dutyOfCare = () => `<section class="pp-callout"><h2><img class="h-ico" src="/img/icons/shield.svg" alt=""> Don’t get fined for someone else’s fly-tipping</h2>
     <p>By law you have to check that whoever takes your waste is a registered waste carrier. If you hand it to a “man with a van” who dumps it, the council can trace it back to you and you can be fined too.</p>
     <p>On Waste Warrior, only registered waste carriers can bid. Every hauler’s carrier number is checked against the Environment Agency public register and shown as a <b>✔ Registered carrier</b> badge on their bid, so you know who you’re dealing with before you pay.</p></section>`;
 
@@ -148,13 +148,13 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
       description: `Cheap rubbish removal in ${t.name} (${t.postcodes.join(', ')}). Post your job free, registered local waste carriers bid the price down, and you pay the lowest bid.`,
       canonical: `/rubbish-removal/${t.slug}`,
       jsonLd: faqLd(items),
-      body: `<section class="hero pp-hero">
-        <span class="eyebrow">♻ ${esc(t.name)} · ${esc(t.postcodes.join(', '))}</span>
+      body: `<section class="hero pp-hero"><div class="hero-copy">
+        <span class="eyebrow">${esc(t.name)} · ${esc(t.postcodes.join(', '))}</span>
         <h1>Rubbish removal in ${esc(t.name)}, priced by competition</h1>
         <p>Post what needs clearing in ${esc(t.name)} ${esc(t.note)}. Local registered waste carriers bid against each other for the job, and the lowest price wins.</p>
         <div class="actions"><a class="btn accent lg" href="/#/register">Post a job free</a><a class="btn ghost lg" href="/for-haulers">I’m a hauler</a></div>
-        ${open ? `<p class="pp-live">🔥 ${open} job${open === 1 ? '' : 's'} near ${esc(t.name)} taking bids right now</p>` : ''}
-      </section>
+        ${open ? `<p class="pp-live">${open} job${open === 1 ? '' : 's'} near ${esc(t.name)} taking bids right now</p>` : ''}
+      </div><img class="hero-art" src="/img/van.svg" alt=""></section>
       ${howItWorks()}
       <section class="block"><h2>What it costs in ${esc(t.name)}</h2>${priceTable()}</section>
       ${dutyOfCare()}
@@ -175,12 +175,12 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
       description: `${s.name} in Hull and East Yorkshire. Post ${s.what} with photos, let registered local haulers bid the price down, and pay the lowest bid securely online.`,
       canonical: `/services/${s.slug}`,
       jsonLd: faqLd(items),
-      body: `<section class="hero pp-hero">
-        <span class="eyebrow">♻ Hull &amp; East Yorkshire</span>
+      body: `<section class="hero pp-hero"><div class="hero-copy">
+        <span class="eyebrow">Hull &amp; East Yorkshire</span>
         <h1>${esc(s.name)} for less</h1>
         <p>Need to get rid of ${esc(s.what)}? Post it with a photo, set the most you’ll pay, and local haulers bid each other down for the job.</p>
         <div class="actions"><a class="btn accent lg" href="/#/register">Post a job free</a></div>
-      </section>
+      </div><img class="hero-art" src="/img/van.svg" alt=""></section>
       <section class="block pp-two">
         <div class="panel"><h2>Typical price</h2><p class="pp-big">${esc(s.price)}</p><p class="hint">A rough guide. Bids often come in lower.</p></div>
         <div class="panel"><h2>Tip for a better price</h2><p>${esc(s.tip)}</p></div>
@@ -207,17 +207,17 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
       description: `Find waste removal and clearance jobs near you. Bid on local jobs with photos, keep ${keep}% of every job you win, and get paid straight to your bank.`,
       canonical: '/for-haulers',
       jsonLd: faqLd(items),
-      body: `<section class="hero pp-hero">
-        <span class="eyebrow">🚚 For waste carriers and clearance firms</span>
+      body: `<section class="hero pp-hero"><div class="hero-copy">
+        <span class="eyebrow">For waste carriers and clearance firms</span>
         <h1>Fill your van with local jobs</h1>
         <p>Customers post waste jobs with photos, dates and access notes. You bid what you want to do it for. Win the job, collect the waste, and get paid straight into your bank.</p>
         <div class="actions"><a class="btn accent lg" href="/#/register">Sign up free and start bidding</a></div>
-      </section>
+      </div><img class="hero-art" src="/img/van.svg" alt=""></section>
       <section class="block"><div class="features pp-features">
-        <div class="feature"><div class="ico">📸</div><h3>Know the job before you go</h3><p class="muted">Photos, amount, dates and access notes on every job, so no wasted trips.</p></div>
-        <div class="feature"><div class="ico">💷</div><h3>Keep ${keep}%</h3><p class="muted">No sign-up fee, no monthly fee and no paying for leads. You only pay when you win and get paid.</p></div>
-        <div class="feature"><div class="ico">🏦</div><h3>Paid the same day</h3><p class="muted">Customers pay up front. Tap “Collected” when you’re done and your share is released as soon as they confirm, or automatically after 24 hours.</p></div>
-        <div class="feature"><div class="ico">⭐</div><h3>Win on reviews, not just price</h3><p class="muted">Customers can book any bid, so good reviews win you work even when you’re not the cheapest.</p></div>
+        <div class="feature"><div class="ico"><img src="/img/icons/photo.svg" alt=""></div><h3>Know the job before you go</h3><p class="muted">Photos, amount, dates and access notes on every job, so no wasted trips.</p></div>
+        <div class="feature"><div class="ico"><img src="/img/icons/pound.svg" alt=""></div><h3>Keep ${keep}%</h3><p class="muted">No sign-up fee, no monthly fee and no paying for leads. You only pay when you win and get paid.</p></div>
+        <div class="feature"><div class="ico"><img src="/img/icons/bank.svg" alt=""></div><h3>Paid the same day</h3><p class="muted">Customers pay up front. Tap “Collected” when you’re done and your share is released as soon as they confirm, or automatically after 24 hours.</p></div>
+        <div class="feature"><div class="ico"><img src="/img/icons/star.svg" alt=""></div><h3>Win on reviews, not just price</h3><p class="muted">Customers can book any bid, so good reviews win you work even when you’re not the cheapest.</p></div>
       </div></section>
       <section class="block"><h2>Getting started takes five minutes</h2><div class="steps pp-steps">
         <div class="step"><div class="n">1</div><h3>Sign up</h3><p class="muted">Create a free account with your email.</p></div>

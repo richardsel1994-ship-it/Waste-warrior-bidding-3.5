@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 170" role="img" aria-label="Bids dropping from £120 to £80">
+  <rect width="280" height="170" rx="12" fill="#e3eafb"/>
+  <g font-family="system-ui,sans-serif" font-weight="800">
+    <g transform="translate(26 22)"><rect width="128" height="36" rx="6" fill="#fff" stroke="#c7d2e3" stroke-width="2"/><text x="14" y="24" font-size="13" fill="#55657a">Gary</text><text x="114" y="24" text-anchor="end" font-size="15" fill="#55657a" text-decoration="line-through">£120</text></g>
+    <g transform="translate(56 66)"><rect width="128" height="36" rx="6" fill="#fff" stroke="#c7d2e3" stroke-width="2"/><text x="14" y="24" font-size="13" fill="#55657a">Nina</text><text x="114" y="24" text-anchor="end" font-size="15" fill="#55657a" text-decoration="line-through">£95</text></g>
+    <g transform="translate(86 110)"><rect width="128" height="38" rx="6" fill="#ffd400" stroke="#0a2259" stroke-width="2"/><text x="14" y="25" font-size="13" fill="#0a2259">Chris</text><text x="114" y="26" text-anchor="end" font-size="18" fill="#0a2259">£80</text></g>
+  </g>
+  <g transform="translate(236 38)" fill="none" stroke="#1747d8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M0 0v86"/><path d="M-16 70 0 88 16 70"/></g>
+</svg>
