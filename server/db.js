@@ -68,6 +68,10 @@ function migrate(db) {
     customer_fee_pct: 'REAL',
     // The hauler's fee percentage, fixed at the same time
     provider_fee_pct: 'REAL',
+    // Paying the hauler their share through Stripe Connect: '', 'pending', 'sent', 'failed' or 'demo'
+    payout_status: "TEXT NOT NULL DEFAULT ''",
+    payout_transfer_id: "TEXT NOT NULL DEFAULT ''",
+    payout_error: "TEXT NOT NULL DEFAULT ''",
   };
   for (const [name, type] of Object.entries(add)) {
     if (!cols.includes(name)) db.exec(`ALTER TABLE listings ADD COLUMN ${name} ${type}`);
@@ -96,6 +100,10 @@ function migrate(db) {
     pro_until: 'INTEGER',
     pro_cancel_at_end: 'INTEGER NOT NULL DEFAULT 0',
     pro_session_id: "TEXT NOT NULL DEFAULT ''",
+    // Hauler payouts: their Stripe Connect Express account, where Stripe holds their bank or debit card details
+    stripe_account_id: "TEXT NOT NULL DEFAULT ''",
+    payouts_enabled: 'INTEGER NOT NULL DEFAULT 0',
+    payouts_details_submitted: 'INTEGER NOT NULL DEFAULT 0',
   };
   for (const [name, type] of Object.entries(addUser)) {
     if (!userCols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);

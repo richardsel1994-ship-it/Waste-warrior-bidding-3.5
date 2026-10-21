@@ -379,3 +379,10 @@ a.card:hover .photo img { transform: none; }
   .bar { height: auto; min-height: 56px; padding-top: 6px; padding-bottom: 6px; }
   #nav a, #nav button.link { padding: 6px 8px; font-size: .9rem; }
 }
+
+/* payouts */
+.payout-status { max-width: 680px; border-color: var(--ink); }
+.payout-status.ok { border-left: 8px solid var(--hivis); }
+.payout-status h2 { margin: 0; }
+.payout-status p { margin: 0; }
+.payout-totals { max-width: 680px; }

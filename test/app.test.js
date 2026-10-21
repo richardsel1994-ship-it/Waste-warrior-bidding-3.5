@@ -19,7 +19,20 @@ const fakeStripe = {
     },
   },
   webhooks: { constructEvent: () => { throw new Error('bad'); } },
+  // Stripe Connect, for paying haulers
+  accounts: {
+    create: async (p) => { connectCalls.push(['create', p]); return { id: 'acct_hauler1' }; },
+    retrieve: async (id) => ({ id, details_submitted: connectState.ready, payouts_enabled: connectState.ready, capabilities: { transfers: connectState.ready ? 'active' : 'inactive' } }),
+    createLoginLink: async () => ({ url: 'https://connect.stripe.com/express/login' }),
+  },
+  accountLinks: { create: async (p) => { connectCalls.push(['link', p]); return { url: 'https://connect.stripe.com/setup/e/acct_hauler1' }; } },
+  transfers: {
+    list: async () => ({ data: [] }),
+    create: async (p) => { connectCalls.push(['transfer', p]); return { id: `tr_${connectCalls.length}` }; },
+  },
 };
+const connectCalls = [];
+const connectState = { ready: false };
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-'));
@@ -467,4 +480,66 @@ test('admin: only admin accounts can see everything and remove jobs', async () =
   } finally {
     srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
   }
+});
+
+test('payouts: haulers add their bank through Stripe and get paid when customers pay', async () => {
+  const customer = (await register('payc')).cookie;
+  const hauler = (await register('payh')).cookie;
+  assert.equal((await api('GET', '/api/me/payouts')).status, 401);
+
+  const before = await api('GET', '/api/me/payouts', { cookie: hauler });
+  assert.equal(before.json.available, true);
+  assert.equal(before.json.connected, false);
+  assert.equal((await api('POST', '/api/me/payouts/dashboard', { cookie: hauler })).status, 409);
+
+  // win and get paid for a job before payouts are set up: the money waits
+  const { json: { id } } = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '100' }) });
+  assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: hauler, body: { amount: 80 } })).status, 201);
+  app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, id);
+  await api('GET', `/api/listings/${id}`);
+  assert.equal((await api('POST', `/api/listings/${id}/checkout`, { cookie: customer })).status, 200);
+  assert.equal((await api('POST', `/api/listings/${id}/verify-payment`, { cookie: customer })).json.status, 'paid');
+  await app.payoutsSettled();
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: hauler })).json.listing.payoutStatus, 'pending');
+  assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 0);
+  const waiting = (await api('GET', '/api/me/payouts', { cookie: hauler })).json;
+  assert.equal(waiting.waitingCents, 7200);
+  assert.equal(waiting.jobs[0].status, 'pending');
+
+  // set up payouts: a UK Express account and a link to Stripe's onboarding
+  const setup = await api('POST', '/api/me/payouts/setup', { cookie: hauler });
+  assert.match(setup.json.url, /connect\.stripe\.com/);
+  const created = connectCalls.find((c) => c[0] === 'create')[1];
+  assert.equal(created.type, 'express');
+  assert.equal(created.country, 'GB');
+  assert.equal(created.email, 'payh@x.com');
+  assert.match(connectCalls.find((c) => c[0] === 'link')[1].return_url, /#\/payouts\?done=1$/);
+  await api('POST', '/api/me/payouts/setup', { cookie: hauler });
+  assert.equal(connectCalls.filter((c) => c[0] === 'create').length, 1); // reuses the account
+
+  // once Stripe has verified them, the waiting money is sent
+  connectState.ready = true;
+  const after = (await api('GET', '/api/me/payouts', { cookie: hauler })).json;
+  assert.equal(after.enabled, true);
+  const transfers = connectCalls.filter((c) => c[0] === 'transfer');
+  assert.equal(transfers.length, 1);
+  assert.equal(transfers[0][1].amount, 7200); // £80 bid minus the 10% fee
+  assert.equal(transfers[0][1].destination, 'acct_hauler1');
+  assert.equal(after.jobs[0].status, 'sent');
+  assert.equal(after.sentCents, 7200);
+  assert.equal(after.waitingCents, 0);
+  assert.equal((await api('GET', '/api/me', { cookie: hauler })).json.user.payouts.enabled, true);
+  assert.match((await api('POST', '/api/me/payouts/dashboard', { cookie: hauler })).json.url, /connect\.stripe\.com/);
+
+  // the next paid job is sent straight away, and only once
+  const { json: { id: id2 } } = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '100' }) });
+  await api('POST', `/api/listings/${id2}/bids`, { cookie: hauler, body: { amount: 50 } });
+  app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, id2);
+  await api('GET', `/api/listings/${id2}`);
+  await api('POST', `/api/listings/${id2}/checkout`, { cookie: customer });
+  await api('POST', `/api/listings/${id2}/verify-payment`, { cookie: customer });
+  await api('POST', `/api/listings/${id2}/verify-payment`, { cookie: customer });
+  await app.payoutsSettled();
+  assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 2);
+  assert.equal((await api('GET', `/api/listings/${id2}`, { cookie: hauler })).json.listing.payoutStatus, 'sent');
 });

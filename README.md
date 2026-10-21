@@ -10,6 +10,7 @@ A reverse-auction marketplace for waste removal. A customer posts a job, local p
 - **Waste Warrior Plus** – a £2.95/month subscription (`#/plus`) for customers that lowers their service fee from 10% to 6%. Billed by Stripe; cancel any time and keep Plus to the end of the paid month. Set `STRIPE_PLUS_PRICE_ID` to the monthly Stripe price, and add the `customer.subscription.updated` and `customer.subscription.deleted` events to the Stripe webhook
 - **Hauler Pro** – a £4.99/month subscription for haulers that lowers the fee taken from their winning bids from 10% to 6%. Set `STRIPE_PRO_PRICE_ID`. Both plans are on the Plans page (`#/plus`), and each job's fees are fixed when the customer starts paying
 - **Haulers & waste carrier checks** – a Haulers page (`#/haulers`) where anyone can check a waste carrier number live against the Environment Agency public register, and haulers verify their own number (CBDU/CBDL) to get a “Registered carrier” badge on their bids and a place on the haulers list. Registrations are re-checked weekly
+- **Hauler payouts** – haulers add their bank account or debit card on Stripe's secure onboarding page (`#/payouts`, “Get paid”); the site never sees card or bank numbers. When a customer pays, the hauler's share (winning bid minus their fee) is transferred to them automatically with Stripe Connect and Stripe pays it into their bank. Money for haulers who haven't set up yet waits and is sent as soon as they finish
 - **Admin** – accounts listed in `ADMIN_EMAILS` get an Admin page (`#/admin`) with earnings, every job and member, and can remove unpaid jobs
 - **Accounts** – sign up / log in (bcrypt-hashed passwords, httpOnly cookie sessions)
 - **Dashboard** – providers track their bids (lowest/undercut/won), customers track their jobs
@@ -56,3 +57,11 @@ test/     API tests (npm test)
 ## Before a real launch
 
 Terms of service and privacy policy, email verification and password reset, moderation/reporting, deciding whether to require a verified waste carrier number before providers can bid, confirming a job is done before the provider is paid, and off-site backups of `/data`.
+
+## Turn on hauler payouts (Stripe Connect)
+
+1. In Stripe → Connect, click **Get started** and choose the **Express** account type (UK platform). Fill in your platform profile and branding.
+2. In Stripe → Developers → Webhooks, add a second endpoint to the same URL `https://YOUR-SITE/api/stripe/webhook`, set to **Events on Connected accounts**, listening for `account.updated`. If its signing secret differs from your main one, use one endpoint for both: add `account.updated` to the existing endpoint and tick “Listen to events on Connected accounts”.
+3. Haulers go to **Get paid** and click **Set up payouts**. Once Stripe verifies them, any money they're owed is sent automatically. Payouts also refresh whenever a hauler opens the Get paid page.
+
+With `DEMO_PAYMENTS=1` the setup button switches payouts on instantly so you can try it.

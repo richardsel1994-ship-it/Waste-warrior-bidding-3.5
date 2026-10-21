@@ -78,6 +78,7 @@
       link('#/plus', 'Plans'),
       ...(state.user ? [
         link('#/dashboard', 'My activity'),
+        link('#/payouts', 'Get paid'),
         ...(state.user.admin ? [link('#/admin', 'Admin')] : []),
         link('#/post', 'Post a job', 'nav-cta'),
         h('button', { class: 'link', text: `Log out (${state.user.name.split(' ')[0]})`, onclick: logout }),
@@ -425,10 +426,11 @@
         }
       } else if (l.status === 'closed') {
         if (l.isSeller) panel.append(acceptBlock(l));
-        else if (l.isWinner) panel.append(h('div', { class: 'notice', text: `🎉 You have the lowest bid at ${money(l.winningBidCents)}. Waiting for the customer to accept and pay. You’ll receive ${money(l.providerPayoutCents)} after the ${l.providerFeePercent ?? state.config.feePercent}% fee.` }));
+        else if (l.isWinner) panel.append(h('div', { class: 'notice', text: `🎉 You have the lowest bid at ${money(l.winningBidCents)}. Waiting for the customer to accept and pay. You’ll receive ${money(l.providerPayoutCents)} after the ${l.providerFeePercent ?? state.config.feePercent}% fee.` }), payoutNudge());
         else panel.append(h('div', { class: 'notice warn', text: 'Bidding on this job has closed.' }));
       } else if (l.status === 'paid') {
         panel.append(l.isWinner || l.isSeller ? bookedBlock(l) : h('div', { class: 'notice', text: 'This job has been booked.' }));
+        if (l.isWinner) panel.append(payoutLine(l.payoutStatus, l.providerPayoutCents));
       } else if (l.status === 'cancelled') {
         panel.append(h('div', { class: 'notice warn', text: l.isSeller ? 'You declined the lowest bid. Post the job again any time.' : 'The customer didn’t go ahead with this job.' }));
       } else if (l.status === 'removed') {
@@ -628,7 +630,7 @@
           tile(o.users, 'Members'),
           tile(`${o.subscribers.plus} / ${o.subscribers.pro}`, 'Plus / Hauler Pro'),
           tile(o.haulersVerified, 'Verified haulers')),
-        h('p', { class: 'hint', text: `Jobs: ${Object.entries(o.jobs).map(([k, n]) => `${STATUS[k] || k} ${n}`).join(' · ') || 'none yet'}. “Owed to haulers” is what you need to pay out from your Stripe balance for paid jobs.` })];
+        h('p', { class: 'hint', text: `Jobs: ${Object.entries(o.jobs).map(([k, n]) => `${STATUS[k] || k} ${n}`).join(' · ') || 'none yet'}. “Owed to haulers” is money from paid jobs still waiting for the hauler to set up payouts. It’s sent automatically once they do.` })];
     }
 
     async function jobs() {
@@ -845,6 +847,93 @@
     draw();
   }
 
+  // ---------- hauler payouts ----------
+  const PAYOUT_TEXT = {
+    sent: 'Paid to your Stripe account',
+    demo: 'Paid (demo mode)',
+    pending: 'Waiting for you to set up payouts',
+    sending: 'Sending now',
+    failed: 'Payout hit a problem, we’ll retry',
+  };
+  function payoutNudge() {
+    if (!state.user || (state.user.payouts && state.user.payouts.enabled)) return null;
+    return h('div', { class: 'notice warn' }, 'Add your bank or debit card so we can pay you when the customer pays. ', h('a', { href: '#/payouts', text: 'Set up payouts' }));
+  }
+  function payoutLine(status, cents) {
+    const st = status || 'pending';
+    if (st === 'pending' && !(state.user && state.user.payouts && state.user.payouts.enabled)) {
+      return h('div', { class: 'notice warn' }, `Your ${money(cents)} is waiting. `, h('a', { href: '#/payouts', text: 'Set up payouts to receive it' }));
+    }
+    return h('div', { class: 'notice' + (st === 'failed' ? ' warn' : '') }, `Your payout of ${money(cents)}: ${PAYOUT_TEXT[st] || st}. `, h('a', { href: '#/payouts', text: 'See payouts' }));
+  }
+
+  async function viewPayouts(query) {
+    if (!requireLogin()) return;
+    document.title = 'Get paid · Waste Warrior Bidding';
+    $main.replaceChildren(h('div', { class: 'loading', text: 'Checking your payout account…' }));
+    let p;
+    try { p = await api('GET', '/api/me/payouts'); } catch (e) { toast(e.message, true); return; }
+    if (state.user) state.user.payouts = { connected: p.connected, enabled: p.enabled };
+    if (query.get('done') || query.get('retry')) history.replaceState(null, '', '#/payouts');
+
+    async function go(path, btn) {
+      btn.disabled = true;
+      try {
+        const r = await api('POST', path);
+        if (r.url) { location.href = r.url; return; }
+        toast('Payouts switched on (demo mode)');
+        viewPayouts(new URLSearchParams());
+      } catch (e) { toast(e.message, true); btn.disabled = false; }
+    }
+    const setupBtn = (text) => {
+      const b = h('button', { class: 'btn accent lg', type: 'button', text, onclick: () => go('/api/me/payouts/setup', b) });
+      return b;
+    };
+
+    let status;
+    if (!p.available) {
+      status = h('div', { class: 'notice warn', text: 'Payouts aren’t switched on for the site yet. Check back soon.' });
+    } else if (p.enabled) {
+      const dash = h('button', { class: 'btn secondary', type: 'button', text: 'Change bank or card details', onclick: () => go('/api/me/payouts/dashboard', dash) });
+      status = h('div', { class: 'panel payout-status ok' },
+        h('h2', { text: 'Payouts are on' }),
+        h('p', { class: 'muted', text: 'When a customer pays for a job you won, your share is sent to your Stripe account automatically and paid into your bank, usually within a few working days.' }),
+        p.bankPayouts === false ? h('div', { class: 'notice warn', text: 'Stripe needs a bit more information before it can pay into your bank. Open your payout details to finish.' }) : null,
+        p.connected && state.config.paymentMode === 'stripe' ? h('div', { class: 'actions' }, dash) : null);
+    } else if (p.connected && p.detailsSubmitted) {
+      status = h('div', { class: 'panel payout-status' },
+        h('h2', { text: 'Stripe is checking your details' }),
+        h('p', { class: 'muted', text: 'This usually takes a few minutes. Any money you’re owed will be sent as soon as it’s done.' }),
+        h('div', { class: 'actions' }, setupBtn('Review my details')));
+    } else {
+      status = h('div', { class: 'panel payout-status' },
+        h('h2', { text: p.connected ? 'Finish setting up payouts' : 'Set up payouts' }),
+        h('p', { class: 'muted', text: 'Add the bank account or debit card you want paid into. You’ll do this on Stripe’s secure page: Waste Warrior never sees or stores your card or bank numbers.' }),
+        h('ul', { class: 'plan-list' },
+          h('li', { text: 'Takes about 5 minutes. Have your bank details and ID ready.' }),
+          h('li', { text: `You keep ${100 - myHaulerFee()}% of every winning bid.` }),
+          h('li', { text: 'Money is sent automatically when the customer pays.' })),
+        h('div', { class: 'actions' }, setupBtn(p.connected ? 'Continue setup' : 'Set up payouts')));
+    }
+
+    const jobs = p.jobs.length
+      ? h('div', {}, ...p.jobs.map((j) => h('a', { class: 'row', href: `#/listing/${j.id}` },
+          h('div', { class: 'grow' }, h('b', { text: j.title }), h('span', { class: 'muted', text: PAYOUT_TEXT[j.status] || j.status })),
+          h('span', { class: 'pill' + (j.status === 'sent' || j.status === 'demo' ? '' : ' warn'), text: money(j.payoutCents) }))))
+      : h('div', { class: 'empty' }, h('p', { text: 'When you win a job and the customer pays, it shows up here.' }), h('a', { class: 'btn', href: '#/', text: 'Find jobs to bid on' }));
+
+    $main.replaceChildren(
+      h('h1', { text: 'Get paid' }),
+      h('p', { class: 'lead muted', text: 'Win a job, collect the waste, get paid straight to your bank.' }),
+      status,
+      h('div', { class: 'stats payout-totals' },
+        h('div', { class: 'stat' }, h('b', { text: money(p.sentCents) }), h('span', { text: 'Paid to you' })),
+        h('div', { class: 'stat' }, h('b', { text: money(p.waitingCents) }), h('span', { text: 'Waiting' }))),
+      h('section', { class: 'block' }, h('h2', { text: 'Your payouts' }), jobs));
+    if (query.get('done') && !p.enabled) toast('Thanks. Stripe is checking your details.');
+    if (query.get('done') && p.enabled) toast('Payouts are on');
+  }
+
   // ---------- router ----------
   async function route() {
     stopTimers();
@@ -863,6 +952,7 @@
     if (path === '/haulers') return viewHaulers();
     if (path === '/plus') return viewPlans(query);
     if (path === '/admin') return viewAdmin();
+    if (path === '/payouts') return viewPayouts(query);
     const m = path.match(/^\/listing\/(\d+)$/);
     if (m) return viewListing(m[1], query);
     $main.replaceChildren(h('div', { class: 'empty' }, h('h2', { text: 'Page not found' }), h('a', { class: 'btn', href: '#/', text: 'Go home' })));
