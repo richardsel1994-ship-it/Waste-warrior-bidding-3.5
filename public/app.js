@@ -84,8 +84,9 @@
         link('#/post', 'Post a job', 'nav-cta'),
         h('button', { class: 'link', text: `Log out (${state.user.name.split(' ')[0]})`, onclick: logout }),
       ] : [
+        link('/for-haulers', 'For haulers'),
         link('#/login', 'Log in'),
-        link('#/register', 'Sign up', 'nav-cta'),
+        link('#/register', 'Sign up free', 'nav-cta'),
       ]));
   }
   async function logout() {
@@ -213,6 +214,92 @@
     }).catch(() => {});
     await load();
     pollTimer = setInterval(load, 20000);
+  }
+
+  // ---------- signed-out front page ----------
+  // Visitors see how it works, a price guide and a preview of open jobs (waste type, area and price only).
+  // Titles, photos, descriptions, addresses and bidding stay members-only.
+  const ESTIMATES = [
+    ['Bin bag (each)', '£1.50–£3.00'], ['Single chair', '£10–£30'], ['Fridge', '£30–£200'],
+    ['Bathroom rip-out', '£250–£400'], ['Garden clearance', '£400–£600'], ['House clearance', '£1,000'],
+  ];
+  async function viewWelcome() {
+    document.title = 'Waste Warrior Bidding · Cheap rubbish removal in Hull & East Yorkshire';
+    const signup = (text, cls) => h('a', { class: cls || 'btn accent lg', href: '#/register', text });
+    const grid = h('div', { class: 'grid' }, ...skeletons(3));
+    const stats = h('div', { class: 'stats', hidden: true });
+    const areas = h('ul', { class: 'pp-links' });
+    const teaser = (j) => h('a', { class: 'card teaser', href: '#/register', 'aria-label': `${j.category} job in ${j.area}. Sign up to see details and bid.` },
+      h('div', { class: 'photo' }, h('span', { 'aria-hidden': 'true', text: ICONS[j.category] || '♻' }),
+        h('span', { class: 'badge', text: j.category }), timer(j.endsAt, 'time')),
+      h('div', { class: 'body' },
+        h('h3', { text: `${j.loadSize} · ${j.area}` }),
+        h('div', { class: 'price-row' },
+          h('div', {}, h('div', { class: 'tiny', text: j.bidCount ? 'Lowest bid' : 'Budget up to' }), h('span', { class: 'price', text: money(j.currentBidCents) })),
+          h('span', { class: 'bidchip' + (j.bidCount ? ' hot' : ''), text: j.bidCount ? `🔥 ${j.bidCount} bid${j.bidCount === 1 ? '' : 's'}` : 'Be first' })),
+        h('span', { class: 'lock', text: '🔒 Sign up free to see photos and bid' })));
+
+    $main.replaceChildren(
+      h('section', { class: 'hero' },
+        h('div', { class: 'hero-copy' },
+          h('span', { class: 'eyebrow', text: '♻ Hull & East Yorkshire · Waste removal priced by competition' }),
+          h('h1', {}, 'Get your waste cleared for ', h('span', { class: 'hl', text: 'less' }), '.'),
+          h('p', { text: 'Post your job with a photo. Local registered waste carriers bid against each other to clear it, and the lowest price wins. Free to post, and you only pay if you accept a bid.' }),
+          h('div', { class: 'actions' }, signup('Post a job free'), h('a', { class: 'btn ghost lg', href: '/for-haulers', text: 'I’m a hauler' })),
+          h('ul', { class: 'trust' }, h('li', { text: '📉 Lowest bid wins' }), h('li', { text: '✔ Registered carriers' }), h('li', { text: '🔒 Card payments by Stripe' }), h('li', { text: '📍 Address kept private' }))),
+        h('img', { class: 'hero-art', src: '/hero.svg', alt: '' })),
+      stats,
+      h('section', { class: 'block' },
+        h('div', { class: 'paths' },
+          h('div', { class: 'panel path' },
+            h('h2', { text: 'Got waste to shift?' }),
+            h('ul', {}, h('li', { text: 'Post furniture, garden waste, rubble or a whole clearance' }), h('li', { text: 'Set the most you’ll pay and watch the price drop' }), h('li', { text: 'Only registered carriers get the badge, so you avoid fly-tipping fines' })),
+            signup('Post a job free', 'btn accent')),
+          h('div', { class: 'panel path' },
+            h('h2', { text: 'Collect waste for a living?' }),
+            h('ul', {}, h('li', { text: 'Local jobs with photos, dates and access notes' }), h('li', { text: `Keep ${100 - state.config.feePercent}% of every job, with no lead fees` }), h('li', { text: 'Customers pay up front, and you’re paid straight to your bank' })),
+            h('a', { class: 'btn', href: '/for-haulers', text: 'How it works for haulers' })))),
+      h('section', { class: 'block' },
+        h('h2', { text: 'How it works' }),
+        h('div', { class: 'steps' },
+          h('div', { class: 'step' }, h('div', { class: 'n', text: '1' }), h('h3', { text: 'Post your job' }), h('p', { class: 'muted', text: 'Say what needs clearing and when, add photos and your maximum budget. It takes two minutes.' })),
+          h('div', { class: 'step' }, h('div', { class: 'n', text: '2' }), h('h3', { text: 'Haulers bid it down' }), h('p', { class: 'muted', text: 'Each new bid has to beat the lowest one. Bidding ends at the time shown and the lowest bid wins.' })),
+          h('div', { class: 'step' }, h('div', { class: 'n', text: '3' }), h('h3', { text: 'Accept and pay' }), h('p', { class: 'muted', text: 'Accept the lowest bid and pay by card. Only then does the hauler get your address.' })))),
+      h('section', { class: 'block' },
+        h('h2', { text: 'Jobs taking bids now' }),
+        h('p', { class: 'muted', text: 'A preview of open jobs. Sign up free to see photos and full details, or to bid.' }),
+        grid),
+      h('section', { class: 'block', 'aria-labelledby': 'w-estimate' },
+        h('h2', { id: 'w-estimate', text: 'Rough price guide' }),
+        h('table', { class: 'estimates' },
+          h('thead', {}, h('tr', {}, h('th', { scope: 'col', text: 'Job type' }), h('th', { scope: 'col', text: 'Rough budget' }))),
+          h('tbody', {}, ...ESTIMATES.map(([job, price]) => h('tr', {}, h('th', { scope: 'row', text: job }), h('td', { text: price }))))),
+        h('p', { class: 'hint', text: 'Rough guides, not quotes. Haulers compete to beat your budget.' })),
+      h('section', { class: 'pp-callout' },
+        h('h2', { text: 'Don’t get fined for someone else’s fly-tipping' }),
+        h('p', { text: 'By law you have to check that whoever takes your waste is a registered waste carrier. If a “man with a van” dumps it, it can be traced back to you and you can be fined too.' }),
+        h('p', { text: 'Haulers on Waste Warrior verify their waste carrier number against the Environment Agency register and show a ✔ Registered carrier badge on every bid.' })),
+      h('section', { class: 'block' }, h('h2', { text: 'Areas we cover' }), areas),
+      h('section', { class: 'cta' },
+        h('div', {}, h('h2', { text: 'Got rubbish to shift?' }), h('p', { text: 'Post a job in two minutes and let local haulers compete for it.' })),
+        signup('Create free account')));
+
+    try {
+      const o = await api('GET', '/api/public/overview');
+      grid.replaceChildren(...(o.jobs.length ? o.jobs.map(teaser)
+        : [h('div', { class: 'empty' }, h('h3', { text: 'No jobs taking bids right now' }), h('p', { text: 'Post yours and be first in line for local haulers.' }), signup('Post a job free', 'btn'))]));
+      areas.replaceChildren(...o.towns.map((t) => h('li', {}, h('a', { href: `/rubbish-removal/${t.slug}`, text: `Rubbish removal ${t.name}` }))));
+      // Only show the numbers once there is something worth showing.
+      if (o.stats.posted >= 10) {
+        stats.replaceChildren(...[[o.stats.open, 'Taking bids now'], [o.stats.posted, 'Jobs posted'], [o.stats.booked, 'Jobs booked'], [o.stats.haulers, 'Registered haulers']]
+          .map(([v, t]) => h('div', { class: 'stat' }, h('b', { text: String(v) }), h('span', { text: t }))));
+        stats.hidden = false;
+      }
+    } catch { grid.replaceChildren(); }
+    pollTimer = setInterval(async () => {
+      if (document.hidden) return;
+      try { const o = await api('GET', '/api/public/overview'); if (o.jobs.length) grid.replaceChildren(...o.jobs.map(teaser)); } catch { /* ignore */ }
+    }, 30000);
   }
 
   function authView(mode) {
@@ -944,7 +1031,7 @@
     const [path, qs] = (location.hash.slice(1) || '/').split('?');
     const query = new URLSearchParams(qs || '');
     window.scrollTo(0, 0);
-    if (path === '/' || path === '') return viewHome();
+    if (path === '/' || path === '') return state.user ? viewHome() : viewWelcome();
     if (path === '/login') return state.user ? (location.hash = '#/') : authView('login');
     if (path === '/register') return state.user ? (location.hash = '#/') : authView('register');
     if (path === '/forgot-password') return recoveryView('forgot');

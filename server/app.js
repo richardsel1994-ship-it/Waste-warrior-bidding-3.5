@@ -11,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const { openDb, tx } = require('./db');
 const { createCarrierChecker } = require('./carrier');
+const { registerPublicPages } = require('./pages');
 
 const CATEGORIES = ['Household', 'Garden', 'Furniture', 'Appliances', 'Building rubble', 'Mixed recycling', 'Commercial'];
 const LOAD_SIZES = ['Single item', 'Quarter van', 'Half van', 'Full van', 'Skip-sized'];
@@ -58,6 +59,8 @@ function createApp(opts = {}) {
     proFeePercent: Number(opts.proFeePercent ?? process.env.PRO_FEE_PERCENT ?? 6),
     proPricePence: Number(opts.proPricePence ?? process.env.PRO_PRICE_PENCE ?? 499),
     // Accounts that can see and manage everything on the site (comma-separated emails).
+    // Shown on the terms and privacy pages (optional).
+    contactEmail: opts.contactEmail ?? process.env.CONTACT_EMAIL ?? '',
     adminEmails: String(opts.adminEmails ?? process.env.ADMIN_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
   };
   if (!(config.feePercent >= 0 && config.feePercent < 50)) throw new Error('PLATFORM_FEE_PERCENT must be between 0 and 49');
@@ -860,6 +863,9 @@ function createApp(opts = {}) {
     const link = await config.stripe.accounts.createLoginLink(u.stripe_account_id);
     res.json({ url: link.url });
   }));
+
+  // ---------- public pages (front page shell, local pages, haulers, terms, privacy, sitemap) ----------
+  registerPublicPages(app, { q, one, config, feePercent: config.feePercent, proFeePercent: config.proFeePercent, proPricePence: config.proPricePence });
 
   // ---------- static ----------
   // Job photos are only for signed-in members.

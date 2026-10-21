@@ -555,3 +555,40 @@ test('payouts: haulers add their bank through Stripe and get paid when customers
   assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 2);
   assert.equal((await api('GET', `/api/listings/${id2}`, { cookie: hauler })).json.listing.payoutStatus, 'sent');
 });
+
+test('public pages: front page shell, local pages, haulers, terms, privacy, sitemap', async () => {
+  const home = await fetch(`${base}/`);
+  assert.equal(home.status, 200);
+  const html = await home.text();
+  assert.ok(html.includes(`<link rel="canonical" href="${base}/">`), 'share links use the site address');
+  assert.ok(!html.includes('__BASE_URL__'));
+  for (const p of ['/rubbish-removal/hull', '/rubbish-removal/beverley', '/services/sofa-removal', '/for-haulers', '/terms', '/privacy']) {
+    const r = await fetch(base + p);
+    assert.equal(r.status, 200, p);
+    assert.match(await r.text(), /<h1>/, p);
+  }
+  assert.equal((await fetch(`${base}/rubbish-removal/atlantis`)).status, 404);
+  const robots = await (await fetch(`${base}/robots.txt`)).text();
+  assert.match(robots, /Disallow: \/api\//);
+  const sitemap = await (await fetch(`${base}/sitemap.xml`)).text();
+  assert.ok(sitemap.includes(`${base}/rubbish-removal/hull`));
+  assert.equal((await fetch(`${base}/og.png`)).status, 200);
+});
+
+test('public overview previews open jobs without private details', async () => {
+  const u = (await register('teaser')).cookie;
+  const created = await api('POST', '/api/listings', { cookie: u, form: listingForm({ title: 'Secret title', description: 'Secret description text', location: 'Hull HU5', address: '1 Hidden Street, Hull HU5 1AA' }) });
+  assert.equal(created.status, 201);
+  const o = await api('GET', '/api/public/overview');
+  assert.equal(o.status, 200);
+  const job = o.json.jobs.find((j) => j.area === 'Hull HU5');
+  assert.ok(job, 'open job is previewed');
+  assert.deepEqual(Object.keys(job).sort(), ['area', 'bidCount', 'category', 'currentBidCents', 'endsAt', 'loadSize']);
+  const raw = JSON.stringify(o.json);
+  for (const secret of ['Secret title', 'Secret description', 'Hidden Street', '.png', 'teaser@x.com']) assert.ok(!raw.includes(secret), secret);
+  assert.ok(o.json.towns.some((t) => t.slug === 'hull'));
+  // The full job is still members-only.
+  assert.equal((await api('GET', `/api/listings/${created.json.id}`)).status, 401);
+  // The Hull page counts it as live.
+  assert.match(await (await fetch(`${base}/rubbish-removal/hull`)).text(), /job[s]? near Hull taking bids/);
+});
