@@ -478,7 +478,7 @@ function createApp(opts = {}) {
     res.status(201).json({ id: Number(r.lastInsertRowid) });
   }));
 
-  app.get('/api/listings', auth(false), (req, res) => {
+  app.get('/api/listings', auth(true), (req, res) => {
     settleAllDue();
     const { category, search, sort = 'ending' } = req.query;
     const rows = q("SELECT * FROM listings WHERE status = 'open'");
@@ -499,13 +499,13 @@ function createApp(opts = {}) {
     res.json({ listings: list });
   });
 
-  app.get('/api/stats', (req, res) => {
+  app.get('/api/stats', auth(true), (req, res) => {
     const l = one("SELECT COUNT(*) AS n FROM listings WHERE status != 'expired'");
     const v = one("SELECT COUNT(*) AS n, COALESCE(SUM(start_price_cents - winning_bid_cents),0) AS saved FROM listings WHERE status = 'paid'");
     res.json({ listings: l.n, booked: v.n, savedCents: v.saved, users: one('SELECT COUNT(*) AS n FROM users').n });
   });
 
-  app.get('/api/listings/:id', auth(false), (req, res) => {
+  app.get('/api/listings/:id', auth(true), (req, res) => {
     let l = one('SELECT * FROM listings WHERE id = ?', Number(req.params.id));
     if (!l) throw new HttpError(404, 'Job not found');
     // Removed jobs are only visible to the customer who posted them and to admins.
@@ -675,7 +675,7 @@ function createApp(opts = {}) {
   const checkLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, legacyHeaders: false });
 
   // Anyone can check a number against the Environment Agency register.
-  app.get('/api/carriers/check', checkLimiter, wrap(async (req, res) => {
+  app.get('/api/carriers/check', auth(true), checkLimiter, wrap(async (req, res) => {
     res.json({ result: await carriers.check(req.query.number) });
   }));
 
@@ -702,7 +702,7 @@ function createApp(opts = {}) {
   }));
 
   // Haulers with a verified registration, most jobs first.
-  app.get('/api/haulers', (req, res) => {
+  app.get('/api/haulers', auth(true), (req, res) => {
     const rows = q(`SELECT ${USER_COLS},
         (SELECT COUNT(*) FROM listings l WHERE l.winner_id = users.id AND l.status = 'paid') AS jobs
       FROM users WHERE carrier_number != '' AND carrier_status = 'registered'
@@ -862,7 +862,8 @@ function createApp(opts = {}) {
   }));
 
   // ---------- static ----------
-  app.use('/uploads', express.static(uploadDir, {
+  // Job photos are only for signed-in members.
+  app.use('/uploads', auth(true), express.static(uploadDir, {
     maxAge: '30d', immutable: true, index: false, dotfiles: 'deny',
     setHeaders: (res) => res.setHeader('X-Content-Type-Options', 'nosniff'),
   }));

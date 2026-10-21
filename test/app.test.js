@@ -116,14 +116,17 @@ test('listing creation needs auth, photo, and a real image', async () => {
   assert.equal((await api('POST', '/api/listings', { cookie: s, form: listingForm({ address: '' }) })).status, 400);
   const ok = await api('POST', '/api/listings', { cookie: s, form: listingForm() });
   assert.equal(ok.status, 201);
-  const got = await api('GET', `/api/listings/${ok.json.id}`);
+  assert.equal((await api('GET', `/api/listings/${ok.json.id}`)).status, 401); // members only
+  const viewer = (await register('viewer1')).cookie;
+  const got = await api('GET', `/api/listings/${ok.json.id}`, { cookie: viewer });
   assert.equal(got.json.listing.images.length, 1);
   assert.equal(got.json.listing.loadSize, 'Half van');
   assert.equal(got.json.listing.accessNotes, 'Side gate, parking on street');
   assert.equal(got.json.listing.collectBy, day(5));
-  assert.equal(got.json.listing.address, undefined); // private to the public
+  assert.equal(got.json.listing.address, undefined); // private to other members
   assert.equal((await api('GET', `/api/listings/${ok.json.id}`, { cookie: s })).json.listing.address, '12 Example Road, Leeds LS6 1AA');
-  const img = await fetch(`${base}/uploads/${got.json.listing.images[0]}`);
+  assert.equal((await fetch(`${base}/uploads/${got.json.listing.images[0]}`)).status, 401);
+  const img = await fetch(`${base}/uploads/${got.json.listing.images[0]}`, { headers: { cookie: viewer } });
   assert.equal(img.status, 200);
   assert.equal(img.headers.get('content-type'), 'image/png');
 });
@@ -143,7 +146,7 @@ test('reverse bidding: lowest bid wins, customer accepts and pays', async () => 
   assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: p2, body: { amount: 95 } })).status, 409); // higher than lowest
   assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: p2, body: { amount: 75 } })).status, 201);
 
-  const open = await api('GET', `/api/listings/${id}`);
+  const open = await api('GET', `/api/listings/${id}`, { cookie: p1 });
   assert.equal(open.json.listing.currentBidCents, 7500);
   assert.equal(open.json.listing.maxNextBidCents, 7450);
   assert.equal(open.json.listing.bids[0].amountCents, 7500);
@@ -197,7 +200,7 @@ test('customer can decline the lowest bid', async () => {
   app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, id);
   assert.equal((await api('POST', `/api/listings/${id}/decline`, { cookie: p })).status, 403);
   assert.equal((await api('POST', `/api/listings/${id}/decline`, { cookie: customer })).status, 200);
-  assert.equal((await api('GET', `/api/listings/${id}`)).json.listing.status, 'cancelled');
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: customer })).json.listing.status, 'cancelled');
   assert.equal((await api('POST', `/api/listings/${id}/checkout`, { cookie: customer })).status, 409);
 });
 
@@ -208,7 +211,7 @@ test('late bids do not extend the auction; it ends at the advertised time', asyn
   const endsAt = Date.now() + 30_000;
   app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(endsAt, id);
   assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: b, body: { amount: 90 } })).status, 201);
-  const { json } = await api('GET', `/api/listings/${id}`);
+  const { json } = await api('GET', `/api/listings/${id}`, { cookie: b });
   assert.equal(json.listing.endsAt, endsAt);
   // once the time is up, no more bids
   app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1, id);
@@ -220,7 +223,7 @@ test('expired listing with no bids; webhook rejects bad signature', async () => 
   const seller = (await register('seller4')).cookie;
   const { json: { id } } = await api('POST', '/api/listings', { cookie: seller, form: listingForm() });
   app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1, id);
-  assert.equal((await api('GET', `/api/listings/${id}`)).json.listing.status, 'expired');
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: seller })).json.listing.status, 'expired');
   // no webhook secret configured in this test app
   assert.equal((await api('POST', '/api/stripe/webhook', { body: {} })).status, 503);
 });
@@ -230,9 +233,11 @@ test('dashboard and list filters', async () => {
   await api('POST', '/api/listings', { cookie: u, form: listingForm({ title: 'Brick rubble', category: 'Building rubble' }) });
   const act = await api('GET', '/api/me/activity', { cookie: u });
   assert.equal(act.json.selling.length, 1);
-  const rubble = await api('GET', '/api/listings?category=Building%20rubble&search=brick');
+  assert.equal((await api('GET', '/api/listings')).status, 401);
+  assert.equal((await api('GET', '/api/stats')).status, 401);
+  const rubble = await api('GET', '/api/listings?category=Building%20rubble&search=brick', { cookie: u });
   assert.ok(rubble.json.listings.some((l) => l.title === 'Brick rubble'));
-  assert.equal((await api('GET', '/api/listings?search=zzzzqq')).json.listings.length, 0);
+  assert.equal((await api('GET', '/api/listings?search=zzzzqq', { cookie: u })).json.listings.length, 0);
 });
 
 test('older databases are upgraded to the job schema', () => {
@@ -292,10 +297,12 @@ test('haulers: verify a number, show it on bids and the haulers list', async () 
     return { status: res.status, json: await res.json(), cookie: (res.headers.get('set-cookie') || '').split(';')[0] };
   };
   try {
-    const pub = await call('GET', '/api/carriers/check?number=CBDU111');
+    assert.equal((await call('GET', '/api/carriers/check?number=CBDU111')).status, 401);
+    assert.equal((await call('GET', '/api/haulers')).status, 401);
+    const cust = await call('POST', '/api/auth/register', { email: 'c@x.com', name: 'Cara Customer', password: 'password123' });
+    const pub = await call('GET', '/api/carriers/check?number=CBDU111', null, cust.cookie);
     assert.equal(pub.json.result.status, 'registered');
 
-    const cust = await call('POST', '/api/auth/register', { email: 'c@x.com', name: 'Cara Customer', password: 'password123' });
     const haul = await call('POST', '/api/auth/register', { email: 'h@x.com', name: 'Harry Hauler', password: 'password123' });
     assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU333' }, haul.cookie)).status, 400);
     assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU222' }, haul.cookie)).status, 400);
@@ -306,7 +313,7 @@ test('haulers: verify a number, show it on bids and the haulers list', async () 
     assert.equal((await call('GET', '/api/me', null, haul.cookie)).json.user.carrier.number, 'CBDU111');
     assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU111' }, cust.cookie)).status, 409);
 
-    const list = await call('GET', '/api/haulers');
+    const list = await call('GET', '/api/haulers', null, cust.cookie);
     assert.equal(list.json.haulers.length, 1);
     assert.equal(list.json.haulers[0].name, 'Harry Hauler');
     assert.equal(list.json.haulers[0].carrier.name, 'GOOD HAULAGE LTD');
@@ -315,12 +322,12 @@ test('haulers: verify a number, show it on bids and the haulers list', async () 
     const f = listingForm();
     const created = await fetch(b + '/api/listings', { method: 'POST', headers: { cookie: cust.cookie }, body: f }).then((r) => r.json());
     assert.equal((await call('POST', `/api/listings/${created.id}/bids`, { amount: 90 }, haul.cookie)).status, 201);
-    const job = await call('GET', `/api/listings/${created.id}`);
+    const job = await call('GET', `/api/listings/${created.id}`, null, cust.cookie);
     assert.deepEqual(job.json.listing.bids[0].carrier.verified, true);
     assert.equal(job.json.listing.bids[0].carrier.number, 'CBDU111');
 
     assert.equal((await call('PUT', '/api/me/carrier', { number: '' }, haul.cookie)).json.user.carrier, null);
-    assert.equal((await call('GET', '/api/haulers')).json.haulers.length, 0);
+    assert.equal((await call('GET', '/api/haulers', null, cust.cookie)).json.haulers.length, 0);
   } finally {
     srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
   }
@@ -479,8 +486,8 @@ test('admin: only admin accounts can see everything and remove jobs', async () =
 
     assert.equal((await call('POST', `/api/admin/jobs/${created.id}/remove`, cust.cookie)).status, 403);
     assert.equal((await call('POST', `/api/admin/jobs/${created.id}/remove`, boss.cookie)).status, 200);
-    assert.equal((await call('GET', '/api/listings')).json.listings.length, 0);
-    assert.equal((await call('GET', `/api/listings/${created.id}`)).status, 404);
+    assert.equal((await call('GET', '/api/listings', cust.cookie)).json.listings.length, 0);
+    assert.equal((await call('GET', `/api/listings/${created.id}`)).status, 401);
     assert.equal((await call('GET', `/api/listings/${created.id}`, cust.cookie)).json.listing.status, 'removed');
   } finally {
     srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
@@ -501,7 +508,7 @@ test('payouts: haulers add their bank through Stripe and get paid when customers
   const { json: { id } } = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '100' }) });
   assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: hauler, body: { amount: 80 } })).status, 201);
   app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, id);
-  await api('GET', `/api/listings/${id}`);
+  await api('GET', `/api/listings/${id}`, { cookie: hauler });
   assert.equal((await api('POST', `/api/listings/${id}/checkout`, { cookie: customer })).status, 200);
   assert.equal((await api('POST', `/api/listings/${id}/verify-payment`, { cookie: customer })).json.status, 'paid');
   await app.payoutsSettled();
@@ -540,7 +547,7 @@ test('payouts: haulers add their bank through Stripe and get paid when customers
   const { json: { id: id2 } } = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '100' }) });
   await api('POST', `/api/listings/${id2}/bids`, { cookie: hauler, body: { amount: 50 } });
   app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, id2);
-  await api('GET', `/api/listings/${id2}`);
+  await api('GET', `/api/listings/${id2}`, { cookie: hauler });
   await api('POST', `/api/listings/${id2}/checkout`, { cookie: customer });
   await api('POST', `/api/listings/${id2}/verify-payment`, { cookie: customer });
   await api('POST', `/api/listings/${id2}/verify-payment`, { cookie: customer });
