@@ -94,6 +94,8 @@ function migrate(db) {
   for (const [name, type] of Object.entries(add)) {
     if (!cols.includes(name)) db.exec(`ALTER TABLE listings ADD COLUMN ${name} ${type}`);
   }
+  // Jobs paid before collections had to be confirmed keep paying out as they did then.
+  if (!cols.includes('completed_at')) db.exec("UPDATE listings SET completed_at = created_at WHERE status = 'paid'");
   if (cols.includes('qty_kg')) db.exec('ALTER TABLE listings DROP COLUMN qty_kg');
 
   // Waste carrier registration, for people who collect waste (haulers).

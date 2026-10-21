@@ -248,11 +248,21 @@ test('older databases are upgraded to the job schema', () => {
   d.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL);
     CREATE TABLE listings (id INTEGER PRIMARY KEY, seller_id INTEGER NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, category TEXT NOT NULL,
       qty_kg REAL NOT NULL, location TEXT NOT NULL, start_price_cents INTEGER NOT NULL, ends_at INTEGER NOT NULL, images TEXT NOT NULL DEFAULT '[]',
-      status TEXT NOT NULL DEFAULT 'open', winner_id INTEGER, winning_bid_cents INTEGER, stripe_session_id TEXT, created_at INTEGER NOT NULL);`);
+      status TEXT NOT NULL DEFAULT 'open', winner_id INTEGER, winning_bid_cents INTEGER, stripe_session_id TEXT, created_at INTEGER NOT NULL);
+    INSERT INTO users VALUES (1, 'o@x.com', 'Old', 'x', 1);
+    INSERT INTO listings (seller_id, title, description, category, qty_kg, location, start_price_cents, ends_at, status, winner_id, winning_bid_cents, created_at)
+      VALUES (1, 'Paid before', 'd', 'Household', 1, 'Hull', 100, 1, 'paid', 1, 90, 5), (1, 'Still open', 'd', 'Household', 1, 'Hull', 100, 1, 'open', NULL, NULL, 6);`);
   d.close();
   const db = openDb(old);
   const cols = db.prepare('PRAGMA table_info(listings)').all().map((c) => c.name);
+  // jobs paid before collections needed confirming aren't held
+  assert.equal(db.prepare("SELECT completed_at FROM listings WHERE title = 'Paid before'").get().completed_at, 5);
+  assert.equal(db.prepare("SELECT completed_at FROM listings WHERE title = 'Still open'").get().completed_at, null);
   db.close();
+  // running the upgrade again changes nothing
+  const again = openDb(old);
+  assert.equal(again.prepare("SELECT completed_at FROM listings WHERE title = 'Still open'").get().completed_at, null);
+  again.close();
   fs.rmSync(old, { recursive: true, force: true });
   assert.ok(cols.includes('load_size') && cols.includes('access_notes') && cols.includes('collect_by'));
   assert.ok(!cols.includes('qty_kg'));
