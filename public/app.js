@@ -1,7 +1,7 @@
 (() => {
   const $main = document.getElementById('main');
   const $nav = document.getElementById('nav');
-  const state = { user: null, config: { categories: [], loadSizes: [], maxImages: 4, paymentMode: 'off', feePercent: 10, plus: { available: false, feePercent: 6, pricePence: 295 }, pro: { available: false, feePercent: 6, pricePence: 499 } } };
+  const state = { user: null, config: { categories: [], loadSizes: [], maxImages: 4, paymentMode: 'off', feePercent: 10, requireCarrier: false, autoReleaseHours: 24, plus: { available: false, feePercent: 6, pricePence: 295 }, pro: { available: false, feePercent: 6, pricePence: 499 } } };
   const isPlus = () => Boolean(state.user && state.user.plus && state.user.plus.active);
   const isPro = () => Boolean(state.user && state.user.pro && state.user.pro.active);
   const myFee = () => (isPlus() ? state.config.plus.feePercent : state.config.feePercent);
@@ -253,18 +253,18 @@
         h('div', { class: 'paths' },
           h('div', { class: 'panel path' },
             h('h2', { text: 'Got waste to shift?' }),
-            h('ul', {}, h('li', { text: 'Post furniture, garden waste, rubble or a whole clearance' }), h('li', { text: 'Set the most you’ll pay and watch the price drop' }), h('li', { text: 'Only registered carriers get the badge, so you avoid fly-tipping fines' })),
+            h('ul', {}, h('li', { text: 'Post furniture, garden waste, rubble or a whole clearance' }), h('li', { text: 'Set the most you’ll pay and watch the price drop' }), h('li', { text: 'Only registered waste carriers can bid, so you avoid fly-tipping fines' }), h('li', { text: 'The hauler is only paid once you confirm the collection' })),
             signup('Post a job free', 'btn accent')),
           h('div', { class: 'panel path' },
             h('h2', { text: 'Collect waste for a living?' }),
-            h('ul', {}, h('li', { text: 'Local jobs with photos, dates and access notes' }), h('li', { text: `Keep ${100 - state.config.feePercent}% of every job, with no lead fees` }), h('li', { text: 'Customers pay up front, and you’re paid straight to your bank' })),
+            h('ul', {}, h('li', { text: 'Local jobs with photos, dates and access notes' }), h('li', { text: `Keep ${100 - state.config.feePercent}% of every job, with no lead fees` }), h('li', { text: 'Tap “Collected” when done and get paid the same day' })),
             h('a', { class: 'btn', href: '/for-haulers', text: 'How it works for haulers' })))),
       h('section', { class: 'block' },
         h('h2', { text: 'How it works' }),
         h('div', { class: 'steps' },
           h('div', { class: 'step' }, h('div', { class: 'n', text: '1' }), h('h3', { text: 'Post your job' }), h('p', { class: 'muted', text: 'Say what needs clearing and when, add photos and your maximum budget. It takes two minutes.' })),
           h('div', { class: 'step' }, h('div', { class: 'n', text: '2' }), h('h3', { text: 'Haulers bid it down' }), h('p', { class: 'muted', text: 'Each new bid has to beat the lowest one. Bidding ends at the time shown and the lowest bid wins.' })),
-          h('div', { class: 'step' }, h('div', { class: 'n', text: '3' }), h('h3', { text: 'Accept and pay' }), h('p', { class: 'muted', text: 'Accept the lowest bid and pay by card. Only then does the hauler get your address.' })))),
+          h('div', { class: 'step' }, h('div', { class: 'n', text: '3' }), h('h3', { text: 'Book and pay' }), h('p', { class: 'muted', text: 'Book the lowest bid or a hauler with better reviews. The hauler is only paid once you confirm the collection.' })))),
       h('section', { class: 'block' },
         h('h2', { text: 'Jobs taking bids now' }),
         h('p', { class: 'muted', text: 'A preview of open jobs. Sign up free to see photos and full details, or to bid.' }),
@@ -278,7 +278,7 @@
       h('section', { class: 'pp-callout' },
         h('h2', { text: 'Don’t get fined for someone else’s fly-tipping' }),
         h('p', { text: 'By law you have to check that whoever takes your waste is a registered waste carrier. If a “man with a van” dumps it, it can be traced back to you and you can be fined too.' }),
-        h('p', { text: 'Haulers on Waste Warrior verify their waste carrier number against the Environment Agency register and show a ✔ Registered carrier badge on every bid.' })),
+        h('p', { text: 'On Waste Warrior only registered waste carriers can bid. Every carrier number is checked against the Environment Agency register and shown as a ✔ Registered carrier badge.' })),
       h('section', { class: 'block' }, h('h2', { text: 'Areas we cover' }), areas),
       h('section', { class: 'cta' },
         h('div', {}, h('h2', { text: 'Got rubbish to shift?' }), h('p', { text: 'Post a job in two minutes and let local haulers compete for it.' })),
@@ -487,8 +487,14 @@
           h('div', {}, 'Area', h('b', { text: l.location }))));
 
       if (open) {
-        if (l.isSeller) panel.append(h('div', { class: 'notice', text: 'This is your job. Providers are bidding the price down. When bidding closes you can accept the lowest bid.' }));
-        else {
+        if (l.isSeller) panel.append(h('div', { class: 'notice', text: 'This is your job. Haulers are bidding the price down. When bidding closes you can book the lowest bid, or choose a hauler with better reviews.' }));
+        else if (state.config.requireCarrier && !(state.user && state.user.carrier && state.user.carrier.verified)) {
+          panel.append(h('div', { class: 'notice warn' },
+            state.user && state.user.carrier && state.user.carrier.status === 'expired'
+              ? 'Your waste carrier registration has expired. Renew it, then update it to bid again. '
+              : 'Only registered waste carriers can bid. Add your waste carrier number and we’ll check it with the Environment Agency in seconds. ',
+            h('a', { href: '#/haulers', text: 'Add your carrier number' })));
+        } else {
           const err = h('div', { class: 'err', role: 'alert' });
           const amount = h('input', { type: 'number', step: '0.01', min: 1, max: l.maxNextBidCents / 100, value: (l.maxNextBidCents / 100).toFixed(2), 'aria-label': 'Your price in pounds' });
           const form = h('form', { novalidate: true },
@@ -519,6 +525,7 @@
         else panel.append(h('div', { class: 'notice warn', text: 'Bidding on this job has closed.' }));
       } else if (l.status === 'paid') {
         panel.append(l.isWinner || l.isSeller ? bookedBlock(l) : h('div', { class: 'notice', text: 'This job has been booked.' }));
+        if (l.isWinner || l.isSeller) panel.append(collectionBlock(l));
         if (l.isWinner) panel.append(payoutLine(l.payoutStatus, l.providerPayoutCents));
       } else if (l.status === 'cancelled') {
         panel.append(h('div', { class: 'notice warn', text: l.isSeller ? 'You declined the lowest bid. Post the job again any time.' : 'The customer didn’t go ahead with this job.' }));
@@ -528,7 +535,7 @@
 
       panel.append(h('div', {}, h('strong', { text: 'Bids (lowest first)' }),
         l.bids.length ? h('ul', { class: 'bids' }, ...l.bids.map((b) => h('li', {},
-          h('span', { class: 'bidder' }, h('span', { text: b.bidder }), carrierBadge(b.carrier)),
+          h('span', { class: 'bidder' }, h('span', { text: b.bidder }), carrierBadge(b.carrier), b.rating ? stars(b.rating) : null),
           h('span', { text: money(b.amountCents) }))))
           : h('p', { class: 'muted', text: 'No bids yet. Be the first!' })));
 
@@ -553,32 +560,51 @@
     function acceptBlock(l) {
       const mode = state.config.paymentMode;
       const err = h('div', { class: 'err', role: 'alert' });
-      const btn = h('button', { class: 'btn accent block', text: `Accept and pay ${money(l.customerTotalCents)}${mode === 'demo' ? ' (demo)' : ''}` });
+      const pct = l.customerFeePercent ?? state.config.feePercent;
+      const choices = l.choices && l.choices.length ? l.choices : [{ bidId: null, amountCents: l.winningBidCents, bidder: l.winnerName, lowest: true, rating: l.winnerRating }];
+      let picked = choices[0];
+      const totalFor = (c) => c.amountCents + Math.round(c.amountCents * pct / 100);
+      const btn = h('button', { class: 'btn accent block' });
+      const summary = h('dl', { class: 'facts' });
+      function drawPick() {
+        btn.textContent = `Book ${picked.bidder} and pay ${money(totalFor(picked))}${mode === 'demo' ? ' (demo)' : ''}`;
+        summary.replaceChildren(
+          h('div', {}, h('dt', { text: 'Their price' }), h('dd', { text: money(picked.amountCents) })),
+          h('div', {}, h('dt', { text: `Service fee (${pct}%${pct < state.config.feePercent ? ', Plus' : ''})` }), h('dd', { text: money(totalFor(picked) - picked.amountCents) })),
+          h('div', {}, h('dt', { text: 'Total to pay' }), h('dd', { text: money(totalFor(picked)) })));
+      }
+      const list = h('div', { class: 'choices', role: 'radiogroup', 'aria-label': 'Choose a hauler' }, ...choices.map((c, i) => {
+        const input = h('input', { type: 'radio', name: 'choice', value: String(i), checked: i === 0 });
+        input.addEventListener('change', () => { picked = c; drawPick(); });
+        return h('label', { class: 'choice' }, input,
+          h('span', { class: 'grow' },
+            h('b', { text: c.bidder }), ' ', c.carrier && c.carrier.verified ? h('span', { class: 'reg ok', text: '✔ Registered carrier' }) : null,
+            h('span', { class: 'hint' }, stars(c.rating), c.jobsDone ? ` · ${c.jobsDone} job${c.jobsDone === 1 ? '' : 's'} done` : (c.rating ? '' : 'New on Waste Warrior'))),
+          h('span', { class: 'choice-price' }, h('b', { text: money(c.amountCents) }), c.lowest ? h('span', { class: 'tiny', text: 'Lowest' }) : null));
+      }));
+      drawPick();
       btn.addEventListener('click', async () => {
         btn.disabled = true; err.textContent = '';
         try {
-          const r = await api('POST', `/api/listings/${id}/checkout`);
+          const r = await api('POST', `/api/listings/${id}/checkout`, picked.bidId != null ? { bidId: picked.bidId } : undefined);
           if (r.url) location.href = r.url;
           else { toast('Job booked (demo payment)'); await fetchData(); draw(); }
         } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
       });
       const decline = h('button', { class: 'btn secondary block', text: 'Don’t go ahead' });
       decline.addEventListener('click', async () => {
-        if (!confirm('Decline this bid? The job will be closed.')) return;
+        if (!confirm('Decline all bids? The job will be closed.')) return;
         decline.disabled = true; err.textContent = '';
         try { await api('POST', `/api/listings/${id}/decline`); await fetchData(); draw(); } catch (ex) { err.textContent = ex.message; decline.disabled = false; }
       });
       return h('div', { class: 'panel' },
-        h('div', { class: 'notice', text: `Bidding has closed. ${l.winnerName} offered the lowest price: ${money(l.winningBidCents)}.` }),
-        h('dl', { class: 'facts' },
-          h('div', {}, h('dt', { text: 'Winning bid' }), h('dd', { text: money(l.winningBidCents) })),
-          h('div', {}, h('dt', { text: `Service fee (${l.customerFeePercent ?? state.config.feePercent}%${l.customerFeePercent < state.config.feePercent ? ', Plus' : ''})` }), h('dd', { text: money(l.customerFeeCents) })),
-          h('div', {}, h('dt', { text: 'Total to pay' }), h('dd', { text: money(l.customerTotalCents) }))),
+        h('div', { class: 'notice', text: choices.length > 1 ? 'Bidding has closed. Choose who you’d like to book. The lowest price is picked for you, but you can choose a hauler with better reviews.' : `Bidding has closed. ${l.winnerName} offered ${money(l.winningBidCents)}.` }),
+        list, summary,
         !isPlus() && state.config.plus.available && h('p', { class: 'hint' }, `Plus members pay a ${state.config.plus.feePercent}% fee instead of ${state.config.feePercent}%. `,
           h('a', { href: '#/plus', text: 'See Plus' })),
         mode === 'off' ? h('div', { class: 'notice warn', text: 'Online payment is not enabled yet.' }) : btn,
         decline,
-        err, h('div', { class: 'hint', text: 'Secure card payment by Stripe. We never see your card details.' }));
+        err, h('div', { class: 'hint', text: 'Secure card payment by Stripe. We never see your card details. The hauler is only paid once the collection is confirmed.' }));
     }
 
     function bookedBlock(l) {
@@ -586,9 +612,67 @@
       return h('div', { class: 'panel' },
         h('div', { class: 'notice', text: l.isSeller ? `✅ Booked and paid. ${c.name} will collect between ${when(l)}.` : `✅ Booked for ${money(l.winningBidCents)}. You’ll receive ${money(l.providerPayoutCents)} after the ${l.providerFeePercent ?? state.config.feePercent}% fee. Please collect between ${when(l)}.` }),
         h('dl', { class: 'facts' },
-          h('div', {}, h('dt', { text: l.isSeller ? 'Your provider' : 'Customer' }), h('dd', { text: c.name })),
+          h('div', {}, h('dt', { text: l.isSeller ? 'Your hauler' : 'Customer' }), h('dd', {}, c.name, l.isSeller && l.winnerRating ? [' ', stars(l.winnerRating)] : null)),
           h('div', {}, h('dt', { text: 'Email' }), h('dd', {}, h('a', { href: `mailto:${c.email}`, text: c.email }))),
           l.isWinner && h('div', {}, h('dt', { text: 'Collection address' }), h('dd', { text: l.address }))));
+    }
+
+    // After payment: the hauler marks it collected; the customer confirms (paying the hauler), reports a problem or reviews.
+    const fmtWhen = (ms) => new Date(ms).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    async function act(path, body, btn, ok) {
+      if (btn) btn.disabled = true;
+      try { const r = await api('POST', `/api/listings/${id}/${path}`, body); if (r.listing) Object.assign(data, r.listing); toast(ok); await fetchData(); draw(); }
+      catch (ex) { toast(ex.message, true); if (btn) btn.disabled = false; }
+    }
+    function reviewForm(onSubmit, label) {
+      let rating = 0;
+      const starBtns = [1, 2, 3, 4, 5].map((n) => h('button', { type: 'button', class: 'star', 'aria-label': `${n} star${n === 1 ? '' : 's'}`, text: '★', onclick: () => { rating = n; starBtns.forEach((b, i) => b.classList.toggle('on', i < n)); } }));
+      const comment = h('textarea', { maxlength: 500, placeholder: 'How did it go? (optional)', 'aria-label': 'Review' });
+      const btn = h('button', { class: 'btn accent block', type: 'button', text: label });
+      btn.addEventListener('click', () => onSubmit(rating ? { rating, comment: comment.value } : {}, btn));
+      return h('div', { class: 'review-form' }, h('div', { class: 'stars-input', role: 'group', 'aria-label': 'Rating' }, ...starBtns), comment, btn);
+    }
+    function collectionBlock(l) {
+      const box = h('div', { class: 'panel' });
+      if (l.isWinner) {
+        if (l.completedAt) {
+          box.append(h('div', { class: 'notice', text: l.autoReleased ? '✔ Collection complete. Your payment has been released.' : '✔ The customer confirmed the collection. Your payment has been released.' }));
+        } else if (l.problemAt) {
+          box.append(h('div', { class: 'notice warn', text: 'The customer reported a problem with this job, so your payment is on hold. Please contact them to sort it out.' }));
+        } else if (l.collectedAt) {
+          box.append(h('div', { class: 'notice', text: `Marked as collected. You’ll be paid as soon as the customer confirms, or automatically at ${fmtWhen(l.releaseAt)}.` }));
+        } else {
+          const b = h('button', { class: 'btn accent block', type: 'button', text: '✔ I’ve collected the waste' });
+          b.addEventListener('click', () => act('collected', null, b, 'Marked as collected'));
+          box.append(h('p', { class: 'muted', text: `Tap this once the job is done. The customer then has ${state.config.autoReleaseHours} hours to confirm or report a problem, and you’re paid as soon as they confirm.` }), b);
+        }
+        return box;
+      }
+      // the customer
+      if (l.completedAt) {
+        box.append(h('div', { class: 'notice', text: '✔ Collection confirmed. Thanks for using Waste Warrior!' }));
+        if (l.review) box.append(h('p', {}, 'Your review: ', stars({ average: l.review.rating }), l.review.comment ? ` “${l.review.comment}”` : ''));
+        else box.append(h('h3', { text: `Rate ${l.contact ? l.contact.name : 'your hauler'}` }), reviewForm((body, btn) => {
+          if (!body.rating) { toast('Choose a star rating first', true); return; }
+          act('review', body, btn, 'Thanks for your review');
+        }, 'Post review'));
+        return box;
+      }
+      if (l.problemAt) {
+        box.append(h('div', { class: 'notice warn', text: `You reported a problem: “${l.problemNote}”. The hauler’s payment is on hold. Once it’s sorted, confirm the collection below.` }));
+      } else if (l.collectedAt) {
+        box.append(h('div', { class: 'notice', text: `${l.contact ? l.contact.name : 'Your hauler'} says the waste has been collected. Please confirm, or report a problem before ${fmtWhen(l.releaseAt)}, when they’ll be paid automatically.` }));
+      } else {
+        box.append(h('p', { class: 'muted', text: 'Once your waste has been collected, confirm it here and the hauler is paid straight away.' }));
+      }
+      box.append(h('h3', { text: 'Has your waste been collected?' }), reviewForm((body, btn) => act('confirm', body, btn, 'Thanks! The hauler has been paid.'), 'Confirm collected and pay the hauler'));
+      if (!l.problemAt) {
+        const note = h('textarea', { maxlength: 500, placeholder: 'What went wrong? e.g. not collected, waste left behind', 'aria-label': 'Describe the problem' });
+        const pb = h('button', { class: 'btn secondary block', type: 'button', text: 'Report a problem and hold payment' });
+        pb.addEventListener('click', () => act('problem', { note: note.value }, pb, 'Problem reported. The payment is on hold.'));
+        box.append(h('details', { class: 'problem' }, h('summary', { text: 'Something wrong?' }), note, pb));
+      }
+      return box;
     }
 
     try {
@@ -729,6 +813,12 @@
         h('thead', {}, h('tr', {}, ...['Job', 'Customer', 'Status', 'Bids', 'Price', 'Fees', 'Hauler', ''].map((t) => h('th', { scope: 'col', text: t })))),
         h('tbody', {}, ...list.map((j) => {
           const rm = j.status !== 'paid' && j.status !== 'removed' && h('button', { class: 'btn secondary sm', type: 'button', text: 'Remove' });
+          const rel = j.status === 'paid' && j.payoutStatus === 'held' && h('button', { class: 'btn secondary sm', type: 'button', text: 'Release payout' });
+          if (rel) rel.addEventListener('click', async () => {
+            if (!confirm(`Release ${money(j.haulerPayoutCents)} to ${j.hauler ? j.hauler.name : 'the hauler'} now?`)) return;
+            rel.disabled = true;
+            try { await api('POST', `/api/admin/jobs/${j.id}/release`); toast('Payout released'); draw(); } catch (ex) { toast(ex.message, true); rel.disabled = false; }
+          });
           if (rm) rm.addEventListener('click', async () => {
             if (!confirm(`Remove “${j.title}” from the site?`)) return;
             rm.disabled = true;
@@ -737,12 +827,13 @@
           return h('tr', {},
             h('th', { scope: 'row' }, h('a', { href: `#/listing/${j.id}`, text: j.title }), h('div', { class: 'hint', text: `${j.location} · ${fmt(j.createdAt)}` })),
             h('td', {}, j.customer.name, h('div', { class: 'hint', text: j.customer.email })),
-            h('td', { text: STATUS[j.status] || j.status }),
+            h('td', {}, STATUS[j.status] || j.status,
+              j.status === 'paid' ? h('div', { class: 'hint', text: j.problem ? `⚠ Problem: ${j.problem}` : j.payoutStatus === 'held' ? (j.collectedAt ? 'Collected, awaiting confirmation' : 'Awaiting collection') : `Payout: ${j.payoutStatus || '—'}` }) : null),
             h('td', { text: String(j.bids) }),
             h('td', { text: money(j.winningBidCents ?? j.budgetCents) }),
             h('td', { text: j.feesCents != null ? money(j.feesCents) : '—' }),
             h('td', {}, j.hauler ? [j.hauler.name, h('div', { class: 'hint', text: j.hauler.email })] : '—'),
-            h('td', {}, rm || ''));
+            h('td', {}, rm || rel || ''));
         }))))];
     }
 
@@ -767,6 +858,16 @@
     }
     $main.replaceChildren(h('h1', { text: 'Admin' }), tabs, body);
     draw();
+  }
+
+  // ★★★★☆ 4.5 (12)
+  function stars(r) {
+    if (!r) return null;
+    const full = Math.round(r.average);
+    return h('span', { class: 'stars', title: `${r.average} out of 5${r.count ? ` from ${r.count} review${r.count === 1 ? '' : 's'}` : ''}` },
+      h('span', { 'aria-hidden': 'true', text: '★'.repeat(full) + '☆'.repeat(5 - full) }),
+      h('span', { class: 'sr', text: `${r.average} out of 5` }),
+      r.count ? h('span', { class: 'n', text: ` ${r.average} (${r.count})` }) : null);
   }
 
   // ---------- haulers & waste carrier checks ----------
@@ -874,7 +975,7 @@
           ? haulers.map((x) => h('div', { class: 'hauler' },
             h('div', { class: 'avatar', 'aria-hidden': 'true', text: x.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() }),
             h('div', { class: 'grow' },
-              h('b', { text: x.name }),
+              h('b', {}, x.name, ' ', x.rating ? stars(x.rating) : null),
               h('span', { class: 'muted', text: [x.carrier.name && x.carrier.name.toUpperCase() !== x.name.toUpperCase() ? x.carrier.name : '', `${x.jobs} job${x.jobs === 1 ? '' : 's'} done`].filter(Boolean).join(' · ') }),
               h('span', { class: 'regno' }, 'Carrier ', h('a', { href: x.carrier.registerUrl, target: '_blank', rel: 'noopener', text: x.carrier.number }),
                 x.carrier.expiresOn ? ` · valid to ${fmtDate(x.carrier.expiresOn)}` : '')),
@@ -938,6 +1039,7 @@
 
   // ---------- hauler payouts ----------
   const PAYOUT_TEXT = {
+    held: 'Waiting for the collection to be confirmed',
     sent: 'Paid to your Stripe account',
     demo: 'Paid (demo mode)',
     pending: 'Waiting for you to set up payouts',
@@ -950,7 +1052,7 @@
   }
   function payoutLine(status, cents) {
     const st = status || 'pending';
-    if (st === 'pending' && !(state.user && state.user.payouts && state.user.payouts.enabled)) {
+    if ((st === 'pending' || st === 'held') && !(state.user && state.user.payouts && state.user.payouts.enabled)) {
       return h('div', { class: 'notice warn' }, `Your ${money(cents)} is waiting. `, h('a', { href: '#/payouts', text: 'Set up payouts to receive it' }));
     }
     return h('div', { class: 'notice' + (st === 'failed' ? ' warn' : '') }, `Your payout of ${money(cents)}: ${PAYOUT_TEXT[st] || st}. `, h('a', { href: '#/payouts', text: 'See payouts' }));
@@ -986,7 +1088,7 @@
       const dash = h('button', { class: 'btn secondary', type: 'button', text: 'Change bank or card details', onclick: () => go('/api/me/payouts/dashboard', dash) });
       status = h('div', { class: 'panel payout-status ok' },
         h('h2', { text: 'Payouts are on' }),
-        h('p', { class: 'muted', text: 'When a customer pays for a job you won, your share is sent to your Stripe account automatically and paid into your bank, usually within a few working days.' }),
+        h('p', { class: 'muted', text: `Once the customer confirms the collection (or ${state.config.autoReleaseHours} hours after you mark a job collected), your share is sent to your Stripe account straight away. Stripe then pays it into your bank, usually within a few working days.` }),
         p.bankPayouts === false ? h('div', { class: 'notice warn', text: 'Stripe needs a bit more information before it can pay into your bank. Open your payout details to finish.' }) : null,
         p.connected && state.config.paymentMode === 'stripe' ? h('div', { class: 'actions' }, dash) : null);
     } else if (p.connected && p.detailsSubmitted) {
@@ -1001,7 +1103,7 @@
         h('ul', { class: 'plan-list' },
           h('li', { text: 'Takes about 5 minutes. Have your bank details and ID ready.' }),
           h('li', { text: `You keep ${100 - myHaulerFee()}% of every winning bid.` }),
-          h('li', { text: 'Money is sent automatically when the customer pays.' })),
+          h('li', { text: 'Money is released as soon as the customer confirms the collection, or automatically after you mark it collected.' })),
         h('div', { class: 'actions' }, setupBtn(p.connected ? 'Continue setup' : 'Set up payouts')));
     }
 

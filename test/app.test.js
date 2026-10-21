@@ -36,7 +36,7 @@ const connectState = { ready: false };
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-'));
-  app = createApp({ dataDir: dir, jwtSecret: 'test', stripe: fakeStripe, mailFrom: 'support@example.com', mailer: { sendMail: async (message) => recoveryEmails.push(message) } });
+  app = createApp({ dataDir: dir, jwtSecret: 'test', stripe: fakeStripe, requireCarrier: false, mailFrom: 'support@example.com', mailer: { sendMail: async (message) => recoveryEmails.push(message) } });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://localhost:${server.address().port}`;
 });
@@ -304,6 +304,12 @@ test('haulers: verify a number, show it on bids and the haulers list', async () 
     assert.equal(pub.json.result.status, 'registered');
 
     const haul = await call('POST', '/api/auth/register', { email: 'h@x.com', name: 'Harry Hauler', password: 'password123' });
+    assert.equal((await call('GET', '/api/config')).json.requireCarrier, true); // on by default
+    // Only registered carriers can bid
+    const early = await fetch(b + '/api/listings', { method: 'POST', headers: { cookie: cust.cookie }, body: listingForm() }).then((r) => r.json());
+    const blocked = await call('POST', `/api/listings/${early.id}/bids`, { amount: 90 }, haul.cookie);
+    assert.equal(blocked.status, 403);
+    assert.match(blocked.json.error, /registered waste carriers/);
     assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU333' }, haul.cookie)).status, 400);
     assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU222' }, haul.cookie)).status, 400);
     assert.equal((await call('PUT', '/api/me/carrier', { number: 'CBDU999' }, haul.cookie)).status, 503);
@@ -325,6 +331,12 @@ test('haulers: verify a number, show it on bids and the haulers list', async () 
     const job = await call('GET', `/api/listings/${created.id}`, null, cust.cookie);
     assert.deepEqual(job.json.listing.bids[0].carrier.verified, true);
     assert.equal(job.json.listing.bids[0].carrier.number, 'CBDU111');
+
+    // An expired registration can't bid
+    a.db.prepare("UPDATE users SET carrier_expires = '2020-01-01' WHERE email = 'h@x.com'").run();
+    const exp = await call('POST', `/api/listings/${early.id}/bids`, { amount: 80 }, haul.cookie);
+    assert.equal(exp.status, 403);
+    assert.match(exp.json.error, /expired/);
 
     assert.equal((await call('PUT', '/api/me/carrier', { number: '' }, haul.cookie)).json.user.carrier, null);
     assert.equal((await call('GET', '/api/haulers', null, cust.cookie)).json.haulers.length, 0);
@@ -353,7 +365,7 @@ test('plus: subscribers pay the lower customer fee; providers still pay the stan
     },
     webhooks: { constructEvent: () => { throw new Error('bad'); } },
   };
-  const a = createApp({ dataDir: d, jwtSecret: 't', stripe, plusPriceId: 'price_plus' });
+  const a = createApp({ dataDir: d, jwtSecret: 't', stripe, plusPriceId: 'price_plus', requireCarrier: false });
   const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
   const b = `http://localhost:${srv.address().port}`;
   const call = async (method, url, body, cookie) => {
@@ -415,7 +427,7 @@ test('plus: subscribers pay the lower customer fee; providers still pay the stan
 
 test('hauler pro: subscribed haulers have a lower fee taken from their winning bid', async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-pro-'));
-  const a = createApp({ dataDir: d, jwtSecret: 't', demoPayments: true, stripeKey: '' });
+  const a = createApp({ dataDir: d, jwtSecret: 't', demoPayments: true, stripeKey: '', requireCarrier: false });
   const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
   const b = `http://localhost:${srv.address().port}`;
   const call = async (method, url, body, cookie) => {
@@ -512,6 +524,15 @@ test('payouts: haulers add their bank through Stripe and get paid when customers
   assert.equal((await api('POST', `/api/listings/${id}/checkout`, { cookie: customer })).status, 200);
   assert.equal((await api('POST', `/api/listings/${id}/verify-payment`, { cookie: customer })).json.status, 'paid');
   await app.payoutsSettled();
+  // held until the collection is confirmed
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: hauler })).json.listing.payoutStatus, 'held');
+  assert.equal((await api('POST', `/api/listings/${id}/confirm`, { cookie: hauler })).status, 403);
+  assert.equal((await api('POST', `/api/listings/${id}/collected`, { cookie: customer })).status, 403);
+  const conf = await api('POST', `/api/listings/${id}/confirm`, { cookie: customer, body: { rating: 5, comment: 'Quick and tidy' } });
+  assert.equal(conf.status, 200);
+  assert.ok(conf.json.listing.completedAt);
+  assert.deepEqual(conf.json.listing.review, { rating: 5, comment: 'Quick and tidy' });
+  await app.payoutsSettled();
   assert.equal((await api('GET', `/api/listings/${id}`, { cookie: hauler })).json.listing.payoutStatus, 'pending');
   assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 0);
   const waiting = (await api('GET', '/api/me/payouts', { cookie: hauler })).json;
@@ -552,8 +573,77 @@ test('payouts: haulers add their bank through Stripe and get paid when customers
   await api('POST', `/api/listings/${id2}/verify-payment`, { cookie: customer });
   await api('POST', `/api/listings/${id2}/verify-payment`, { cookie: customer });
   await app.payoutsSettled();
-  assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 2);
+  assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 1); // held
+  // the hauler marks it collected; the customer doesn't respond, so it's released automatically
+  const col = await api('POST', `/api/listings/${id2}/collected`, { cookie: hauler });
+  assert.equal(col.status, 200);
+  assert.ok(col.json.listing.releaseAt > Date.now() + 23 * 3600_000);
+  app.releaseDue();
+  await app.payoutsSettled();
+  assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 1); // not yet due
+  app.db.prepare('UPDATE listings SET release_at = ? WHERE id = ?').run(Date.now() - 1, id2);
+  app.releaseDue();
+  app.releaseDue();
+  await app.payoutsSettled();
+  assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 2); // sent once
+  const done = (await api('GET', `/api/listings/${id2}`, { cookie: customer })).json.listing;
+  assert.equal(done.autoReleased, true);
   assert.equal((await api('GET', `/api/listings/${id2}`, { cookie: hauler })).json.listing.payoutStatus, 'sent');
+  // reviews: once per job, 1 to 5 stars; shown as the hauler's rating
+  assert.equal((await api('POST', `/api/listings/${id2}/review`, { cookie: customer, body: { rating: 6 } })).status, 400);
+  assert.equal((await api('POST', `/api/listings/${id2}/review`, { cookie: hauler, body: { rating: 4 } })).status, 403);
+  assert.equal((await api('POST', `/api/listings/${id2}/review`, { cookie: customer, body: { rating: 4 } })).status, 201);
+  assert.equal((await api('POST', `/api/listings/${id2}/review`, { cookie: customer, body: { rating: 4 } })).status, 409);
+  assert.deepEqual((await api('GET', `/api/listings/${id2}`, { cookie: customer })).json.listing.winnerRating, { average: 4.5, count: 2 });
+  // a problem report holds the payout
+  const { json: { id: id3 } } = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '100' }) });
+  await api('POST', `/api/listings/${id3}/bids`, { cookie: hauler, body: { amount: 40 } });
+  app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, id3);
+  await api('GET', `/api/listings/${id3}`, { cookie: hauler });
+  await api('POST', `/api/listings/${id3}/checkout`, { cookie: customer });
+  await api('POST', `/api/listings/${id3}/verify-payment`, { cookie: customer });
+  await api('POST', `/api/listings/${id3}/collected`, { cookie: hauler });
+  assert.equal((await api('POST', `/api/listings/${id3}/problem`, { cookie: customer, body: { note: 'no' } })).status, 400);
+  assert.equal((await api('POST', `/api/listings/${id3}/problem`, { cookie: customer, body: { note: 'They left half the bags behind' } })).status, 200);
+  app.db.prepare('UPDATE listings SET release_at = ? WHERE id = ?').run(Date.now() - 1, id3);
+  app.releaseDue();
+  await app.payoutsSettled();
+  assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 2);
+  assert.equal((await api('GET', `/api/listings/${id3}`, { cookie: hauler })).json.listing.payoutStatus, 'held');
+  // confirming afterwards (problem sorted) pays straight away
+  await api('POST', `/api/listings/${id3}/confirm`, { cookie: customer });
+  await app.payoutsSettled();
+  assert.equal(connectCalls.filter((c) => c[0] === 'transfer').length, 3);
+  assert.equal((await api('POST', `/api/listings/${id3}/problem`, { cookie: customer, body: { note: 'Too late now' } })).status, 409);
+});
+
+test('customer can choose any hauler’s bid, not only the lowest', async () => {
+  const customer = (await register('choosec')).cookie;
+  const cheap = (await register('cheaph')).cookie;
+  const good = (await register('goodh')).cookie;
+  const { json: { id } } = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '100' }) });
+  await api('POST', `/api/listings/${id}/bids`, { cookie: good, body: { amount: 90 } });
+  await api('POST', `/api/listings/${id}/bids`, { cookie: cheap, body: { amount: 80 } });
+  await api('POST', `/api/listings/${id}/bids`, { cookie: good, body: { amount: 70 } });
+  await api('POST', `/api/listings/${id}/bids`, { cookie: cheap, body: { amount: 60 } });
+  app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, id);
+  const closed = (await api('GET', `/api/listings/${id}`, { cookie: customer })).json.listing;
+  // one choice per hauler, at their best price, lowest first
+  assert.deepEqual(closed.choices.map((c) => [c.bidder, c.amountCents, c.lowest]), [['cheaph user', 6000, true], ['goodh user', 7000, false]]);
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: good })).json.listing.choices, undefined);
+  // a hauler's older, higher bid can't be chosen
+  const older = app.db.prepare('SELECT id FROM bids WHERE listing_id = ? AND amount_cents = 9000').get(id).id;
+  assert.equal((await api('POST', `/api/listings/${id}/checkout`, { cookie: customer, body: { bidId: older } })).status, 400);
+  const pick = closed.choices[1].bidId;
+  const co = await api('POST', `/api/listings/${id}/checkout`, { cookie: customer, body: { bidId: pick } });
+  assert.equal(co.status, 200);
+  assert.equal(stripeCalls.at(-1).line_items[0].price_data.unit_amount, 7000);
+  assert.equal(stripeCalls.at(-1).metadata.provider_payout_pence, '6300');
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: good })).json.listing.isWinner, true);
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: cheap })).json.listing.isWinner, false);
+  await api('POST', `/api/listings/${id}/verify-payment`, { cookie: customer });
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: good })).json.listing.contact.email, 'choosec@x.com');
+  assert.equal((await api('GET', `/api/listings/${id}`, { cookie: cheap })).json.listing.contact, undefined);
 });
 
 test('public pages: front page shell, local pages, haulers, terms, privacy, sitemap', async () => {

@@ -113,12 +113,12 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
   const howItWorks = () => `<section class="block"><h2>How it works</h2><div class="steps pp-steps">
     <div class="step"><div class="n">1</div><h3>Post your job</h3><p class="muted">Add photos, say what needs clearing, when it can be collected and the most you want to pay. It takes about two minutes and it’s free.</p></div>
     <div class="step"><div class="n">2</div><h3>Haulers bid it down</h3><p class="muted">Local waste carriers compete for the job. Every new bid has to beat the lowest one, so the price only goes down.</p></div>
-    <div class="step"><div class="n">3</div><h3>Accept and pay</h3><p class="muted">When bidding closes, accept the lowest bid and pay securely by card. Only then does the hauler get your address.</p></div>
+    <div class="step"><div class="n">3</div><h3>Book and pay</h3><p class="muted">When bidding closes, book the lowest bid or a hauler with better reviews, and pay securely by card. The hauler is only paid once you confirm the collection.</p></div>
   </div></section>`;
 
   const dutyOfCare = () => `<section class="pp-callout"><h2>Don’t get fined for someone else’s fly-tipping</h2>
     <p>By law you have to check that whoever takes your waste is a registered waste carrier. If you hand it to a “man with a van” who dumps it, the council can trace it back to you and you can be fined too.</p>
-    <p>Haulers on Waste Warrior can verify their waste carrier number against the Environment Agency public register, and verified haulers show a <b>✔ Registered carrier</b> badge on every bid, so you can see who you’re dealing with before you pay.</p></section>`;
+    <p>On Waste Warrior, only registered waste carriers can bid. Every hauler’s carrier number is checked against the Environment Agency public register and shown as a <b>✔ Registered carrier</b> badge on their bid, so you know who you’re dealing with before you pay.</p></section>`;
 
   const priceTable = () => `<table class="estimates"><thead><tr><th scope="col">Job type</th><th scope="col">Rough budget</th></tr></thead><tbody>${ESTIMATES.map(([a, b]) => `<tr><th scope="row">${esc(a)}</th><td>${esc(b)}</td></tr>`).join('')}</tbody></table>
     <p class="hint">Rough guides only. The final price depends on the amount, access and location, and haulers compete to beat your budget.</p>`;
@@ -129,7 +129,9 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
     [`How much does rubbish removal cost in ${place}?`, 'You set the most you’re willing to pay, and haulers bid below it. Small loads such as a chair or a few bags often go for £10–£30, a full van for £150–£250, and a whole house clearance around £1,000.'],
     ['Is it free to post a job?', `Yes. You only pay if you accept a bid. A ${feePercent}% service fee is added at checkout.`],
     ['When does the hauler get my address?', 'Only after you accept their bid and pay. Before that, haulers only see your town or postcode area.'],
-    ['Are the haulers licensed?', 'Haulers can verify their waste carrier number against the Environment Agency register, and verified haulers show a Registered carrier badge on their bids. Always pick a verified hauler.'],
+    ['Are the haulers licensed?', 'Yes. Only haulers with a waste carrier number verified on the Environment Agency register can bid, and registrations are re-checked regularly.'],
+    ['Do I have to take the cheapest bid?', 'No. When bidding closes the cheapest bid is picked for you, but you can book any hauler who bid, for example one with better reviews.'],
+    ['What if the hauler doesn’t turn up?', 'The hauler is only paid once you confirm the collection. If something goes wrong, report a problem and their payment is held while it’s sorted out.'],
   ];
   const faqHtml = (items) => `<section class="block"><h2>Questions</h2><div class="pp-faq">${items.map(([qq, a]) => `<details><summary>${esc(qq)}</summary><p>${esc(a)}</p></details>`).join('')}</div></section>`;
   const faqLd = (items) => ({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: items.map(([qq, a]) => ({ '@type': 'Question', name: qq, acceptedAnswer: { '@type': 'Answer', text: a } })) });
@@ -196,8 +198,8 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
     const keep = 100 - feePercent, keepPro = 100 - proFeePercent;
     const items = [
       ['Does it cost anything to join?', `No. Signing up and bidding are free. When you win and the customer pays, ${feePercent}% is taken from your bid and you keep ${keep}%.`],
-      ['How do I get paid?', 'Add your bank account or debit card on Stripe’s secure page. When the customer pays, your share is sent automatically and Stripe pays it into your bank, usually within a few working days.'],
-      ['Do I need a waste carrier licence?', 'Yes. Anyone collecting other people’s waste needs an upper-tier waste carrier registration (CBDU…) from the Environment Agency. Add your number and we check it on the public register.'],
+      ['How do I get paid?', 'Add your bank account or debit card on Stripe’s secure page. The customer pays up front. When you’ve done the job, tap Collected: your share is released as soon as the customer confirms, or automatically after 24 hours, and Stripe pays it into your bank.'],
+      ['Do I need a waste carrier licence?', 'Yes. Only registered waste carriers can bid. Anyone collecting other people’s waste needs an upper-tier registration (CBDU…) from the Environment Agency. Add your number and we check it on the public register in seconds.'],
       ['Is there a way to keep more?', `Hauler Pro is ${money(proPricePence)} a month and lowers the fee to ${proFeePercent}%, so you keep ${keepPro}% of every job.`],
     ];
     res.send(layout(req, {
@@ -214,14 +216,14 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
       <section class="block"><div class="features pp-features">
         <div class="feature"><div class="ico">📸</div><h3>Know the job before you go</h3><p class="muted">Photos, amount, dates and access notes on every job, so no wasted trips.</p></div>
         <div class="feature"><div class="ico">💷</div><h3>Keep ${keep}%</h3><p class="muted">No sign-up fee, no monthly fee and no paying for leads. You only pay when you win and get paid.</p></div>
-        <div class="feature"><div class="ico">🏦</div><h3>Paid automatically</h3><p class="muted">Customers pay up front by card. Your share is sent to your bank through Stripe.</p></div>
-        <div class="feature"><div class="ico">✔</div><h3>Stand out as registered</h3><p class="muted">Verify your waste carrier number and get a Registered carrier badge on every bid.</p></div>
+        <div class="feature"><div class="ico">🏦</div><h3>Paid the same day</h3><p class="muted">Customers pay up front. Tap “Collected” when you’re done and your share is released as soon as they confirm, or automatically after 24 hours.</p></div>
+        <div class="feature"><div class="ico">⭐</div><h3>Win on reviews, not just price</h3><p class="muted">Customers can book any bid, so good reviews win you work even when you’re not the cheapest.</p></div>
       </div></section>
       <section class="block"><h2>Getting started takes five minutes</h2><div class="steps pp-steps">
         <div class="step"><div class="n">1</div><h3>Sign up</h3><p class="muted">Create a free account with your email.</p></div>
-        <div class="step"><div class="n">2</div><h3>Add your carrier number</h3><p class="muted">On the Haulers page. We check it live with the Environment Agency.</p></div>
+        <div class="step"><div class="n">2</div><h3>Add your carrier number</h3><p class="muted">On the Haulers page. We check it live with the Environment Agency. You need it to bid.</p></div>
         <div class="step"><div class="n">3</div><h3>Set up payouts</h3><p class="muted">Add your bank on Stripe’s secure page so you’re paid automatically.</p></div>
-        <div class="step"><div class="n">4</div><h3>Bid on jobs</h3><p class="muted">Pick jobs that suit your route and bid. Lowest bid at closing time wins.</p></div>
+        <div class="step"><div class="n">4</div><h3>Bid, collect, get paid</h3><p class="muted">Bid on jobs that suit your route. If you’re booked, collect the waste, tap Collected and get paid.</p></div>
       </div></section>
       <section class="block pp-two">
         <div class="panel"><h2>Example</h2><p>You win a garden clearance at <b>£200</b>.</p><p>Standard: you receive <b>${money(200 * keep)}</b>.</p><p>With Hauler Pro: you receive <b>${money(200 * keepPro)}</b>.</p></div>
@@ -243,9 +245,9 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
     body: `<article class="pp-doc panel"><h1>Terms of use</h1><p class="hint">Last updated ${updated}</p>
       <h2>1. What Waste Warrior is</h2><p>Waste Warrior Bidding is an online marketplace. Customers post waste removal jobs and independent haulers bid to do them. We are not a waste carrier and do not collect waste ourselves. The contract to collect the waste is between the customer and the hauler whose bid is accepted.</p>
       <h2>2. Accounts</h2><p>You must be 18 or over and give accurate details. Keep your password private. You are responsible for what happens on your account.</p>
-      <h2>3. Posting a job</h2><p>Describe the waste honestly, including anything hazardous, heavy or hard to reach, and only post photos you have the right to use. Hazardous waste such as asbestos, chemicals or clinical waste must be clearly described and may need a specialist. Bidding closes at the advertised time and the lowest bid at that moment wins. You may accept and pay for the winning bid, or decline it.</p>
+      <h2>3. Posting a job</h2><p>Describe the waste honestly, including anything hazardous, heavy or hard to reach, and only post photos you have the right to use. Hazardous waste such as asbestos, chemicals or clinical waste must be clearly described and may need a specialist. Bidding closes at the advertised time. You may then book and pay for any hauler’s bid (the lowest is selected by default), or decline them all. Once the waste has been collected, confirm it or report a problem promptly.</p>
       <h2>4. Bidding as a hauler</h2><p>Every bid is a price for the whole job as described. Anyone collecting other people’s waste must hold a valid waste carrier registration and dispose of waste lawfully at licensed sites. If the job differs materially from the description, agree any change with the customer before starting. Do not use details from the site to arrange jobs off the platform.</p>
-      <h2>5. Payments and fees</h2><p>Customers pay through Stripe when they accept a bid. A service fee of ${feePercent}% is added to the customer’s price, and ${feePercent}% is taken from the hauler’s winning bid (lower rates apply to Waste Warrior Plus and Hauler Pro subscribers). The hauler’s share is paid out through Stripe Connect. Subscriptions renew monthly until cancelled and stay active until the end of the paid month.</p>
+      <h2>5. Payments and fees</h2><p>Customers pay through Stripe when they accept a bid. A service fee of ${feePercent}% is added to the customer’s price, and ${feePercent}% is taken from the hauler’s winning bid (lower rates apply to Waste Warrior Plus and Hauler Pro subscribers). The hauler’s share is held until the customer confirms the collection, or until ${config.autoReleaseHours} hours after the hauler marks the job collected if the customer has not reported a problem, and is then paid out through Stripe Connect. Subscriptions renew monthly until cancelled and stay active until the end of the paid month.</p>
       <h2>6. Cancellations and problems</h2><p>If a hauler cannot attend, they must tell the customer as soon as possible. If a job is not carried out, contact us and we will look into refunding the customer. Nothing in these terms affects your statutory rights.</p>
       <h2>7. Our responsibility</h2><p>We check waste carrier numbers against the public register when haulers add them, but we do not supervise the work. To the extent the law allows, we are not liable for the acts of customers or haulers. We do not exclude liability for death or personal injury caused by our negligence, or for fraud.</p>
       <h2>8. Removing content and accounts</h2><p>We may remove jobs, bids or accounts that break these terms or the law.</p>

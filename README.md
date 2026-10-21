@@ -4,6 +4,10 @@ A reverse-auction marketplace for waste removal. A customer posts a job, local p
 
 - **Jobs** – waste type, how much (single item up to skip-sized), collection dates, access notes, up to 4 photos and a maximum budget
 - **Private address** – bidders only see the town or postcode area; the full address and contact details go to the winning provider once the customer has paid
+- **Registered carriers only** – haulers must have a waste carrier number verified on the Environment Agency register (and not expired) before they can bid. Set `REQUIRE_VERIFIED_CARRIER=0` to turn this off
+- **Customer chooses** – when bidding closes the lowest bid is selected, but the customer can book any hauler's best bid instead, seeing their badge, star rating and jobs done
+- **Collection confirmed before payout** – the hauler's share is held after payment. The hauler taps “Collected”; the payout is released as soon as the customer confirms, or automatically `AUTO_RELEASE_HOURS` (default 24) later. Reporting a problem holds it, and admins can release it from the Admin page
+- **Reviews** – customers rate the hauler 1–5 stars with a comment, once per job; ratings show on bids, the haulers list and when choosing a hauler
 - **Reverse bidding** – each bid must undercut the lowest by at least 50p, countdowns, bid history, and bidding always ends at the advertised time (late bids don't extend the clock)
 - **Accept and pay** – when bidding closes the customer accepts the lowest bid and pays by card through Stripe Checkout (or declines it); confirmed by webhook and by direct verification on return
 - **Platform fee** – 10% added to the customer's price at checkout and 10% taken from the provider's bid (set `PLATFORM_FEE_PERCENT` to change it). Each Stripe payment records the provider's payout and your fee in its metadata

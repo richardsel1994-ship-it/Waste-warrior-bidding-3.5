@@ -59,6 +59,11 @@ function createApp(opts = {}) {
     proFeePercent: Number(opts.proFeePercent ?? process.env.PRO_FEE_PERCENT ?? 6),
     proPricePence: Number(opts.proPricePence ?? process.env.PRO_PRICE_PENCE ?? 499),
     // Accounts that can see and manage everything on the site (comma-separated emails).
+    // Only haulers with a verified waste carrier registration can bid (set REQUIRE_VERIFIED_CARRIER=0 to allow anyone).
+    requireCarrier: opts.requireCarrier ?? process.env.REQUIRE_VERIFIED_CARRIER !== '0',
+    // After the hauler marks a job collected, the payout is released this many hours later unless the customer
+    // confirms sooner (released straight away) or reports a problem (held).
+    autoReleaseHours: Number(opts.autoReleaseHours ?? process.env.AUTO_RELEASE_HOURS ?? 24),
     // Shown on the terms and privacy pages (optional).
     contactEmail: opts.contactEmail ?? process.env.CONTACT_EMAIL ?? '',
     adminEmails: String(opts.adminEmails ?? process.env.ADMIN_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
@@ -149,7 +154,7 @@ function createApp(opts = {}) {
   function settleAllDue() {
     for (const l of q("SELECT * FROM listings WHERE status = 'open' AND ends_at <= ?", now())) settle(l);
   }
-  const timer = setInterval(settleAllDue, 15000);
+  const timer = setInterval(() => { settleAllDue(); releaseDue(); }, 15000);
   timer.unref();
 
   function publicListing(l, userId) {
@@ -176,12 +181,31 @@ function createApp(opts = {}) {
       if (isSeller) Object.assign(out, { customerFeePercent: f.customerFeePercent, customerFeeCents: f.customerFeeCents, customerTotalCents: f.customerTotalCents });
       if (isWinner) Object.assign(out, { providerFeePercent: f.providerFeePercent, providerFeeCents: f.providerFeeCents, providerPayoutCents: f.providerPayoutCents, payoutStatus: l.payout_status || null });
     }
+    if (isSeller || isWinner) {
+      Object.assign(out, {
+        paidAt: l.paid_at || null, collectedAt: l.collected_at || null, completedAt: l.completed_at || null,
+        autoReleased: Boolean(l.auto_released), releaseAt: l.release_at || null, problemAt: l.problem_at || null,
+      });
+      if (isSeller) {
+        out.problemNote = l.problem_note || '';
+        const rv = one('SELECT rating, comment FROM reviews WHERE listing_id = ?', l.id);
+        out.review = rv ? { rating: rv.rating, comment: rv.comment } : null;
+      }
+    }
+    if (l.winner_id) out.winnerRating = ratingFor(l.winner_id);
     // The full address and contact details are private until the job is booked.
     if (isSeller) out.address = l.address;
     if (l.status === 'paid' && isWinner) Object.assign(out, { address: l.address, contact: { name: customer.name, email: customer.email } });
     if (l.status === 'paid' && isSeller) out.contact = { name: winner.name, email: winner.email };
     return out;
   }
+
+  // A hauler's average review score, or null before their first review.
+  function ratingFor(userId) {
+    const r = one('SELECT AVG(rating) AS a, COUNT(*) AS n FROM reviews WHERE hauler_id = ?', userId);
+    return r && r.n ? { average: Math.round(r.a * 10) / 10, count: r.n } : null;
+  }
+  const jobsDoneBy = (userId) => one("SELECT COUNT(*) AS n FROM listings WHERE winner_id = ? AND status = 'paid'", userId).n;
 
   // A hauler's waste carrier registration as shown to other people.
   const RECHECK_MS = 7 * DAY_MS;
@@ -232,9 +256,20 @@ function createApp(opts = {}) {
   }
 
   // ---------- Stripe webhook (needs raw body, so before express.json) ----------
+  // The customer has paid. The hauler's share is held until the collection is confirmed.
   function markPaid(listingId, sessionId) {
-    const r = run("UPDATE listings SET status = 'paid' WHERE id = ? AND status = 'closed' AND stripe_session_id = ?", listingId, sessionId);
-    if (r.changes) payHauler(listingId);
+    run("UPDATE listings SET status = 'paid', paid_at = ?, payout_status = 'held' WHERE id = ? AND status = 'closed' AND stripe_session_id = ?", now(), listingId, sessionId);
+  }
+  // A job's payout can go once the customer confirmed (or an admin released it), or the hauler marked it
+  // collected and the waiting time passed without the customer reporting a problem.
+  const payoutReady = (l) => Boolean(l.completed_at) || Boolean(l.release_at && l.release_at <= now() && !l.problem_at);
+  function releaseDue() {
+    const due = q(`SELECT id FROM listings WHERE status = 'paid' AND payout_status = 'held' AND completed_at IS NULL
+      AND problem_at IS NULL AND release_at IS NOT NULL AND release_at <= ?`, now());
+    for (const r of due) {
+      run('UPDATE listings SET completed_at = ?, auto_released = 1 WHERE id = ? AND completed_at IS NULL', now(), r.id);
+      payHauler(r.id);
+    }
   }
 
   // ---------- hauler payouts (Stripe Connect) ----------
@@ -244,18 +279,22 @@ function createApp(opts = {}) {
   // money waits here and is sent as soon as they finish.
   async function sendPayout(listingId) {
     const l = one('SELECT * FROM listings WHERE id = ?', listingId);
-    if (!l || l.status !== 'paid' || l.payout_status === 'sent' || l.payout_status === 'sending') return;
+    if (!l || l.status !== 'paid' || l.payout_status === 'sent' || l.payout_status === 'sending' || l.payout_status === 'demo') return;
+    if (!payoutReady(l)) {
+      run("UPDATE listings SET payout_status = 'held' WHERE id = ? AND payout_status = ''", l.id);
+      return;
+    }
     if (!config.stripe || l.stripe_session_id === 'demo') {
-      run("UPDATE listings SET payout_status = 'demo' WHERE id = ? AND payout_status = ''", l.id);
+      run("UPDATE listings SET payout_status = 'demo' WHERE id = ? AND payout_status IN ('', 'held')", l.id);
       return;
     }
     const hauler = one('SELECT stripe_account_id, payouts_enabled FROM users WHERE id = ?', l.winner_id);
     if (!hauler || !hauler.stripe_account_id || !hauler.payouts_enabled) {
-      run("UPDATE listings SET payout_status = 'pending' WHERE id = ? AND payout_status = ''", l.id);
+      run("UPDATE listings SET payout_status = 'pending' WHERE id = ? AND payout_status IN ('', 'held')", l.id);
       return;
     }
     // Claim the job so two callers can't both send it.
-    if (!run("UPDATE listings SET payout_status = 'sending' WHERE id = ? AND payout_status IN ('', 'pending', 'failed')", l.id).changes) return;
+    if (!run("UPDATE listings SET payout_status = 'sending' WHERE id = ? AND payout_status IN ('', 'held', 'pending', 'failed')", l.id).changes) return;
     try {
       const group = `job_${l.id}`;
       // A previous attempt may have reached Stripe before failing here: reuse it rather than paying twice.
@@ -288,7 +327,7 @@ function createApp(opts = {}) {
     return p;
   }
   function payWaitingJobs(userId) {
-    const ids = q("SELECT id FROM listings WHERE winner_id = ? AND status = 'paid' AND payout_status IN ('', 'pending', 'failed')", userId).map((r) => r.id);
+    const ids = q("SELECT id FROM listings WHERE winner_id = ? AND status = 'paid' AND payout_status IN ('', 'held', 'pending', 'failed')", userId).map((r) => r.id);
     return Promise.all(ids.map(payHauler));
   }
   // Store what Stripe says about a hauler's account; once it can receive money, send anything waiting.
@@ -423,6 +462,8 @@ function createApp(opts = {}) {
     plus: { available: planAvailable('plus'), feePercent: PLANS.plus.feePercent, pricePence: PLANS.plus.pricePence },
     pro: { available: planAvailable('pro'), feePercent: PLANS.pro.feePercent, pricePence: PLANS.pro.pricePence },
     maxImages: MAX_IMAGES,
+    requireCarrier: config.requireCarrier,
+    autoReleaseHours: config.autoReleaseHours,
     paymentMode: config.stripe ? 'stripe' : config.demoPayments ? 'demo' : 'off',
   }));
 
@@ -515,19 +556,29 @@ function createApp(opts = {}) {
     if (l.status === 'removed' && !(req.user && (req.user.id === l.seller_id || isAdmin(req.user)))) throw new HttpError(404, 'Job not found');
     l = settle(l);
     const out = publicListing(l, req.user && req.user.id);
-    out.bids = q(`SELECT b.amount_cents AS amountCents, b.created_at AS createdAt, u.name AS bidder,
+    out.bids = q(`SELECT b.amount_cents AS amountCents, b.created_at AS createdAt, u.name AS bidder, u.id AS uid,
                          u.carrier_number, u.carrier_status, u.carrier_name, u.carrier_tier, u.carrier_expires, u.carrier_checked_at
                   FROM bids b JOIN users u ON u.id = b.user_id WHERE b.listing_id = ?
                   ORDER BY b.amount_cents ASC, b.id ASC LIMIT 20`, l.id)
       .map((b) => {
         const c = carrierInfo(b);
-        return { amountCents: b.amountCents, createdAt: b.createdAt, bidder: b.bidder, carrier: c && { number: c.number, verified: c.verified, registerUrl: c.registerUrl } };
+        return { amountCents: b.amountCents, createdAt: b.createdAt, bidder: b.bidder, rating: ratingFor(b.uid), carrier: c && { number: c.number, verified: c.verified, registerUrl: c.registerUrl } };
       });
+    // When bidding has closed the customer can pick any hauler's best offer, not only the lowest.
+    if (out.isSeller && l.status === 'closed') out.choices = bidChoices(l.id);
     res.json({ listing: out, serverTime: now() });
   });
 
   app.post('/api/listings/:id/bids', auth(true), (req, res) => {
     const id = Number(req.params.id);
+    if (config.requireCarrier) {
+      const c = carrierInfo(req.user);
+      if (!c || !c.verified) {
+        throw new HttpError(403, c && c.status === 'expired'
+          ? 'Your waste carrier registration has expired. Renew it, then update it on the Haulers page to bid again.'
+          : 'Only registered waste carriers can bid. Add your waste carrier number on the Haulers page first.');
+      }
+    }
     const cents = Math.round(Number(req.body && req.body.amount) * 100);
     if (!Number.isInteger(cents) || cents <= 0 || cents > 100_000_00) throw new HttpError(400, 'Enter a valid bid amount');
     tx(db, () => {
@@ -645,6 +696,7 @@ function createApp(opts = {}) {
           hauler: l.winner_name ? { name: l.winner_name, email: l.winner_email } : null,
           bids: l.bid_count, budgetCents: l.start_price_cents, winningBidCents: l.winning_bid_cents,
           feesCents: f ? f.platformCents : null, haulerPayoutCents: f ? f.providerPayoutCents : null, payoutStatus: l.payout_status || null,
+          problem: l.problem_at ? l.problem_note : null, collectedAt: l.collected_at || null, completedAt: l.completed_at || null,
         };
       }),
     });
@@ -664,6 +716,16 @@ function createApp(opts = {}) {
       })),
     });
   });
+
+  // Release a held payout, for example once a reported problem has been sorted out.
+  app.post('/api/admin/jobs/:id/release', auth(true), adminOnly, wrap(async (req, res) => {
+    const l = one('SELECT * FROM listings WHERE id = ?', Number(req.params.id));
+    if (!l) throw new HttpError(404, 'Job not found');
+    if (l.status !== 'paid') throw new HttpError(409, 'Only paid jobs have a payout to release');
+    run('UPDATE listings SET completed_at = COALESCE(completed_at, ?), problem_at = NULL WHERE id = ?', now(), l.id);
+    await payHauler(l.id);
+    res.json({ payoutStatus: one('SELECT payout_status FROM listings WHERE id = ?', l.id).payout_status });
+  }));
 
   // Take a job off the site. Paid jobs can't be removed here (refund them in Stripe first).
   app.post('/api/admin/jobs/:id/remove', auth(true), adminOnly, (req, res) => {
@@ -714,7 +776,7 @@ function createApp(opts = {}) {
     for (const u of rows.filter((r) => !r.carrier_checked_at || r.carrier_checked_at < now() - RECHECK_MS).slice(0, 5)) {
       carriers.check(u.carrier_number).then((r) => { if (r.status !== 'unavailable') saveCarrier(u.id, r); }).catch(() => {});
     }
-    const haulers = rows.map((u) => ({ name: u.name, jobs: u.jobs, carrier: carrierInfo(u) }))
+    const haulers = rows.map((u) => ({ name: u.name, jobs: u.jobs, rating: ratingFor(u.id), carrier: carrierInfo(u) }))
       .filter((h) => h.carrier.verified);
     res.json({ haulers });
   });
@@ -736,10 +798,43 @@ function createApp(opts = {}) {
     res.json({ status: 'cancelled' });
   });
 
+  // Each hauler's best (lowest) bid on a job, lowest first.
+  function bidChoices(listingId) {
+    const seen = new Set(), out = [];
+    const rows = q(`SELECT b.id, b.user_id, b.amount_cents, u.name, ${USER_COLS.split(', ').filter((c) => c.startsWith('carrier_')).map((c) => `u.${c}`).join(', ')}
+      FROM bids b JOIN users u ON u.id = b.user_id WHERE b.listing_id = ? ORDER BY b.amount_cents ASC, b.id ASC`, listingId);
+    for (const b of rows) {
+      if (seen.has(b.user_id)) continue;
+      seen.add(b.user_id);
+      const c = carrierInfo(b);
+      out.push({
+        bidId: b.id, amountCents: b.amount_cents, bidder: b.name, lowest: out.length === 0,
+        carrier: c && { number: c.number, verified: c.verified, registerUrl: c.registerUrl },
+        rating: ratingFor(b.user_id), jobsDone: jobsDoneBy(b.user_id),
+      });
+    }
+    return out;
+  }
+
   app.post('/api/listings/:id/checkout', auth(true), wrap(async (req, res) => {
-    const l = customerJob(req);
+    let l = customerJob(req);
     if (l.status === 'paid') throw new HttpError(409, 'Already paid');
     if (l.status !== 'closed') throw new HttpError(409, 'This job is not waiting for payment');
+    // The customer may choose any hauler's best bid instead of the lowest.
+    const bidId = req.body && req.body.bidId != null ? Number(req.body.bidId) : null;
+    if (bidId != null) {
+      const choice = bidChoices(l.id).find((c) => c.bidId === bidId);
+      if (!choice) throw new HttpError(400, 'Choose one of the bids on this job');
+      const bid = one('SELECT user_id, amount_cents FROM bids WHERE id = ?', bidId);
+      if (bid.user_id !== l.winner_id || bid.amount_cents !== l.winning_bid_cents) {
+        // A checkout started for a different hauler must not be paid as well.
+        if (config.stripe && l.stripe_session_id && l.stripe_session_id !== 'demo' && config.stripe.checkout.sessions.expire) {
+          await config.stripe.checkout.sessions.expire(l.stripe_session_id).catch(() => {});
+        }
+        run("UPDATE listings SET winner_id = ?, winning_bid_cents = ?, stripe_session_id = NULL WHERE id = ? AND status = 'closed'", bid.user_id, bid.amount_cents, l.id);
+        l = one('SELECT * FROM listings WHERE id = ?', l.id);
+      }
+    }
     const seller = one('SELECT plus_status, plus_until FROM users WHERE id = ?', l.seller_id);
     const winner = one('SELECT pro_status, pro_until FROM users WHERE id = ?', l.winner_id);
     const pct = isPlus(seller) ? config.plusFeePercent : config.feePercent;
@@ -768,7 +863,7 @@ function createApp(opts = {}) {
       return res.json({ url: session.url });
     }
     if (config.demoPayments) {
-      run("UPDATE listings SET status = 'paid', stripe_session_id = 'demo', customer_fee_pct = ?, provider_fee_pct = ? WHERE id = ?", pct, ppct, l.id);
+      run("UPDATE listings SET status = 'paid', paid_at = ?, payout_status = 'held', stripe_session_id = 'demo', customer_fee_pct = ?, provider_fee_pct = ? WHERE id = ?", now(), pct, ppct, l.id);
       return res.json({ demo: true });
     }
     throw new HttpError(503, 'Payments are not configured yet');
@@ -785,6 +880,61 @@ function createApp(opts = {}) {
     res.json({ status: one('SELECT status FROM listings WHERE id = ?', l.id).status });
   }));
 
+  // ---------- after payment: collection, confirmation, problems and reviews ----------
+  function haulerJob(req) {
+    const l = one('SELECT * FROM listings WHERE id = ?', Number(req.params.id));
+    if (!l) throw new HttpError(404, 'Job not found');
+    if (l.winner_id !== req.user.id) throw new HttpError(403, 'Only the hauler booked for this job can do that');
+    if (l.status !== 'paid') throw new HttpError(409, 'This job hasn’t been booked and paid for yet');
+    return l;
+  }
+  function saveReview(l, customerId, body) {
+    const rating = Number(body && body.rating);
+    const comment = String((body && body.comment) || '').trim();
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new HttpError(400, 'Choose a rating from 1 to 5 stars');
+    if (comment.length > 500) throw new HttpError(400, 'Keep your review under 500 characters');
+    if (one('SELECT 1 FROM reviews WHERE listing_id = ?', l.id)) throw new HttpError(409, 'You’ve already reviewed this job');
+    run('INSERT INTO reviews (listing_id, hauler_id, customer_id, rating, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)', l.id, l.winner_id, customerId, rating, comment, now());
+  }
+  const listingStatus = (id, uid) => publicListing(one('SELECT * FROM listings WHERE id = ?', id), uid);
+
+  // The hauler has collected the waste. The customer has a short window to confirm or report a problem.
+  app.post('/api/listings/:id/collected', auth(true), (req, res) => {
+    const l = haulerJob(req);
+    if (!l.collected_at) {
+      run('UPDATE listings SET collected_at = ?, release_at = ? WHERE id = ? AND collected_at IS NULL', now(), now() + config.autoReleaseHours * 3600_000, l.id);
+    }
+    res.json({ listing: listingStatus(l.id, req.user.id) });
+  });
+
+  // The customer confirms the waste was collected: the hauler is paid straight away. A review can come with it.
+  app.post('/api/listings/:id/confirm', auth(true), wrap(async (req, res) => {
+    const l = customerJob(req);
+    if (l.status !== 'paid') throw new HttpError(409, 'This job hasn’t been paid for yet');
+    if (req.body && req.body.rating != null && req.body.rating !== '') saveReview(l, req.user.id, req.body);
+    if (!l.completed_at) run('UPDATE listings SET completed_at = ?, problem_at = NULL WHERE id = ? AND completed_at IS NULL', now(), l.id);
+    await payHauler(l.id);
+    res.json({ listing: listingStatus(l.id, req.user.id) });
+  }));
+
+  // Something went wrong: hold the hauler's payout until it's sorted out.
+  app.post('/api/listings/:id/problem', auth(true), (req, res) => {
+    const l = customerJob(req);
+    if (l.status !== 'paid') throw new HttpError(409, 'This job hasn’t been paid for yet');
+    if (l.completed_at || ['sent', 'sending', 'demo'].includes(l.payout_status)) throw new HttpError(409, 'The hauler has already been paid for this job. Please contact us instead.');
+    const note = String((req.body && req.body.note) || '').trim();
+    if (note.length < 5 || note.length > 500) throw new HttpError(400, 'Tell us what went wrong (5 to 500 characters)');
+    run('UPDATE listings SET problem_at = ?, problem_note = ? WHERE id = ?', now(), note, l.id);
+    res.json({ listing: listingStatus(l.id, req.user.id) });
+  });
+
+  app.post('/api/listings/:id/review', auth(true), (req, res) => {
+    const l = customerJob(req);
+    if (l.status !== 'paid' || !l.completed_at) throw new HttpError(409, 'You can review the hauler once the collection is confirmed');
+    saveReview(l, req.user.id, req.body);
+    res.status(201).json({ listing: listingStatus(l.id, req.user.id) });
+  });
+
   // ---------- dashboard ----------
   app.get('/api/me/activity', auth(true), (req, res) => {
     settleAllDue();
@@ -799,7 +949,8 @@ function createApp(opts = {}) {
 
   // ---------- hauler payouts ----------
   const payoutJobs = (uid) => q("SELECT * FROM listings WHERE winner_id = ? AND status = 'paid' ORDER BY created_at DESC", uid)
-    .map((l) => ({ id: l.id, title: l.title, payoutCents: jobFees(l).providerPayoutCents, status: l.payout_status || 'pending', collectBy: l.collect_by }));
+    .map((l) => ({ id: l.id, title: l.title, payoutCents: jobFees(l).providerPayoutCents, status: l.payout_status || 'pending', collectBy: l.collect_by,
+      collectedAt: l.collected_at || null, releaseAt: l.release_at || null, problem: Boolean(l.problem_at) }));
 
   app.get('/api/me/payouts', auth(true), wrap(async (req, res) => {
     let u = req.user;
@@ -891,10 +1042,11 @@ function createApp(opts = {}) {
   // Send any payouts that were waiting or failed when the server last stopped.
   if (config.stripe) {
     run("UPDATE listings SET payout_status = 'failed' WHERE payout_status = 'sending'");
-    for (const r of q("SELECT DISTINCT winner_id FROM listings WHERE status = 'paid' AND payout_status IN ('pending', 'failed')")) payWaitingJobs(r.winner_id);
+    for (const r of q("SELECT DISTINCT winner_id FROM listings WHERE status = 'paid' AND payout_status IN ('held', 'pending', 'failed')")) payWaitingJobs(r.winner_id);
   }
 
   app.payoutsSettled = () => Promise.all([...payouts]);
+  app.releaseDue = releaseDue;
   app.close = () => { clearInterval(timer); db.close(); };
   app.db = db;
   return app;

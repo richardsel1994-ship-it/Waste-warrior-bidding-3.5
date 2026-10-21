@@ -48,6 +48,16 @@ function openDb(dataDir) {
       amount_cents INTEGER NOT NULL,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS reviews (
+      id INTEGER PRIMARY KEY,
+      listing_id INTEGER NOT NULL UNIQUE REFERENCES listings(id),
+      hauler_id INTEGER NOT NULL REFERENCES users(id),
+      customer_id INTEGER NOT NULL REFERENCES users(id),
+      rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+      comment TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_reviews_hauler ON reviews(hauler_id);
     CREATE INDEX IF NOT EXISTS idx_bids_listing ON bids(listing_id, amount_cents DESC);
     CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status, ends_at);
   `);
@@ -72,6 +82,14 @@ function migrate(db) {
     payout_status: "TEXT NOT NULL DEFAULT ''",
     payout_transfer_id: "TEXT NOT NULL DEFAULT ''",
     payout_error: "TEXT NOT NULL DEFAULT ''",
+    // Confirming the collection before the hauler is paid
+    paid_at: 'INTEGER',
+    collected_at: 'INTEGER', // the hauler marked the job collected
+    completed_at: 'INTEGER', // the customer confirmed, an admin released it, or it was released automatically
+    auto_released: 'INTEGER NOT NULL DEFAULT 0',
+    release_at: 'INTEGER', // when the payout is released if the customer doesn't respond
+    problem_at: 'INTEGER', // the customer reported a problem: the payout is held
+    problem_note: "TEXT NOT NULL DEFAULT ''",
   };
   for (const [name, type] of Object.entries(add)) {
     if (!cols.includes(name)) db.exec(`ALTER TABLE listings ADD COLUMN ${name} ${type}`);
