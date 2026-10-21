@@ -12,6 +12,7 @@ A reverse-auction marketplace for waste removal. A customer posts a job, local p
 - **Haulers & waste carrier checks** – a Haulers page (`#/haulers`) where anyone can check a waste carrier number live against the Environment Agency public register, and haulers verify their own number (CBDU/CBDL) to get a “Registered carrier” badge on their bids and a place on the haulers list. Registrations are re-checked weekly
 - **Hauler payouts** – haulers add their bank account or debit card on Stripe's secure onboarding page (`#/payouts`, “Get paid”); the site never sees card or bank numbers. When a customer pays, the hauler's share (winning bid minus their fee) is transferred to them automatically with Stripe Connect and Stripe pays it into their bank. Money for haulers who haven't set up yet waits and is sent as soon as they finish
 - **Admin** – accounts listed in `ADMIN_EMAILS` get an Admin page (`#/admin`) with earnings, every job and member, and can remove unpaid jobs
+- **Members only** – everything (jobs, photos, haulers, plans, stats) needs an account; signed-out visitors only see the sign-in and sign-up pages
 - **Accounts** – sign up / log in (bcrypt-hashed passwords, httpOnly cookie sessions)
 - **Dashboard** – providers track their bids (lowest/undercut/won), customers track their jobs
 - Prices in pounds (GBP). Search, waste-type filters and sorting; responsive, dark-mode and keyboard friendly

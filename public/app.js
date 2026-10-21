@@ -72,11 +72,12 @@
   function renderNav() {
     const route = location.hash || '#/';
     const link = (href, text, cls) => h('a', { href, text, class: (cls || '') + (route === href ? ' active' : '') });
+    // Signed-out visitors only get the sign-in and sign-up buttons.
     $nav.replaceChildren(
-      link('#/', 'Browse'),
-      link('#/haulers', 'Haulers'),
-      link('#/plus', 'Plans'),
       ...(state.user ? [
+        link('#/', 'Browse'),
+        link('#/haulers', 'Haulers'),
+        link('#/plus', 'Plans'),
         link('#/dashboard', 'My activity'),
         link('#/payouts', 'Get paid'),
         ...(state.user.admin ? [link('#/admin', 'Admin')] : []),
@@ -218,7 +219,8 @@
     const reg = mode === 'register';
     const err = h('div', { class: 'err', role: 'alert' });
     const f = h('form', { class: 'panel narrow', novalidate: true },
-      h('h2', { text: reg ? 'Create your account' : 'Welcome back' }),
+      h('h2', { text: reg ? 'Create your account' : 'Sign in to Waste Warrior' }),
+      h('p', { class: 'muted', text: reg ? 'It’s free. Post waste jobs or bid on them.' : 'Sign in or create a free account to see and post waste removal jobs.' }),
       reg && h('label', {}, 'Name', h('input', { name: 'name', autocomplete: 'name', required: true })),
       h('label', {}, 'Email', h('input', { name: 'email', type: 'email', autocomplete: 'email', required: true })),
       h('label', {}, 'Password', h('input', { name: 'password', type: 'password', autocomplete: reg ? 'new-password' : 'current-password', required: true, minlength: 8 }),
@@ -947,6 +949,12 @@
     if (path === '/register') return state.user ? (location.hash = '#/') : authView('register');
     if (path === '/forgot-password') return recoveryView('forgot');
     if (path === '/reset-password') return recoveryView('reset', query.get('token') || '');
+    // Everything else is for signed-in members only.
+    if (!state.user) {
+      if (path !== '/') sessionStorageSet('next', location.hash);
+      location.replace('#/login');
+      return;
+    }
     if (path === '/post') return viewPost();
     if (path === '/dashboard') return viewDashboard();
     if (path === '/haulers') return viewHaulers();
