@@ -171,7 +171,7 @@ function createApp(opts = {}) {
     if (l.winning_bid_cents != null) {
       const f = fees(l.winning_bid_cents, customerPctFor(l, customer), providerPctFor(l, winner));
       if (isSeller) Object.assign(out, { customerFeePercent: f.customerFeePercent, customerFeeCents: f.customerFeeCents, customerTotalCents: f.customerTotalCents });
-      if (isWinner) Object.assign(out, { providerFeePercent: f.providerFeePercent, providerFeeCents: f.providerFeeCents, providerPayoutCents: f.providerPayoutCents });
+      if (isWinner) Object.assign(out, { providerFeePercent: f.providerFeePercent, providerFeeCents: f.providerFeeCents, providerPayoutCents: f.providerPayoutCents, payoutStatus: l.payout_status || null });
     }
     // The full address and contact details are private until the job is booked.
     if (isSeller) out.address = l.address;
@@ -198,10 +198,11 @@ function createApp(opts = {}) {
   }
   const USER_COLS = 'id, email, name, carrier_number, carrier_status, carrier_name, carrier_tier, carrier_expires, carrier_checked_at, '
     + 'stripe_customer_id, plus_subscription_id, plus_status, plus_until, plus_cancel_at_end, plus_session_id, '
-    + 'pro_subscription_id, pro_status, pro_until, pro_cancel_at_end, pro_session_id';
+    + 'pro_subscription_id, pro_status, pro_until, pro_cancel_at_end, pro_session_id, '
+    + 'stripe_account_id, payouts_enabled, payouts_details_submitted';
   const planJson = (u, p) => ({ active: onPlan(u, p), status: u[`${p}_status`] || null, until: u[`${p}_until`] || null, cancelAtEnd: Boolean(u[`${p}_cancel_at_end`]) });
   const isAdmin = (u) => Boolean(u && config.adminEmails.includes(String(u.email).toLowerCase()));
-  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u), plus: planJson(u, 'plus'), pro: planJson(u, 'pro'), admin: isAdmin(u) || undefined } : null);
+  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u), plus: planJson(u, 'plus'), pro: planJson(u, 'pro'), payouts: { connected: Boolean(u.stripe_account_id), enabled: Boolean(u.payouts_enabled) }, admin: isAdmin(u) || undefined } : null);
 
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -229,7 +230,73 @@ function createApp(opts = {}) {
 
   // ---------- Stripe webhook (needs raw body, so before express.json) ----------
   function markPaid(listingId, sessionId) {
-    run("UPDATE listings SET status = 'paid' WHERE id = ? AND status = 'closed' AND stripe_session_id = ?", listingId, sessionId);
+    const r = run("UPDATE listings SET status = 'paid' WHERE id = ? AND status = 'closed' AND stripe_session_id = ?", listingId, sessionId);
+    if (r.changes) payHauler(listingId);
+  }
+
+  // ---------- hauler payouts (Stripe Connect) ----------
+  // Haulers enter their bank or debit card on Stripe's own onboarding page, never on this site.
+  // When a customer pays, the hauler's share (winning bid minus their fee) is transferred to their
+  // Stripe account, and Stripe pays it out to their bank. If they haven't set up payouts yet the
+  // money waits here and is sent as soon as they finish.
+  async function sendPayout(listingId) {
+    const l = one('SELECT * FROM listings WHERE id = ?', listingId);
+    if (!l || l.status !== 'paid' || l.payout_status === 'sent' || l.payout_status === 'sending') return;
+    if (!config.stripe || l.stripe_session_id === 'demo') {
+      run("UPDATE listings SET payout_status = 'demo' WHERE id = ? AND payout_status = ''", l.id);
+      return;
+    }
+    const hauler = one('SELECT stripe_account_id, payouts_enabled FROM users WHERE id = ?', l.winner_id);
+    if (!hauler || !hauler.stripe_account_id || !hauler.payouts_enabled) {
+      run("UPDATE listings SET payout_status = 'pending' WHERE id = ? AND payout_status = ''", l.id);
+      return;
+    }
+    // Claim the job so two callers can't both send it.
+    if (!run("UPDATE listings SET payout_status = 'sending' WHERE id = ? AND payout_status IN ('', 'pending', 'failed')", l.id).changes) return;
+    try {
+      const group = `job_${l.id}`;
+      // A previous attempt may have reached Stripe before failing here: reuse it rather than paying twice.
+      const existing = await config.stripe.transfers.list({ transfer_group: group, limit: 1 });
+      let transfer = existing && existing.data && existing.data[0];
+      if (!transfer) {
+        const session = await config.stripe.checkout.sessions.retrieve(l.stripe_session_id, { expand: ['payment_intent'] });
+        const pi = session.payment_intent;
+        const charge = pi && typeof pi === 'object' ? (typeof pi.latest_charge === 'string' ? pi.latest_charge : pi.latest_charge && pi.latest_charge.id) : null;
+        transfer = await config.stripe.transfers.create({
+          amount: jobFees(l).providerPayoutCents,
+          currency: 'gbp',
+          destination: hauler.stripe_account_id,
+          transfer_group: group,
+          ...(charge ? { source_transaction: charge } : {}),
+          description: `Waste Warrior job #${l.id}: ${l.title}`.slice(0, 200),
+          metadata: { listing_id: String(l.id), hauler_id: String(l.winner_id) },
+        });
+      }
+      run("UPDATE listings SET payout_status = 'sent', payout_transfer_id = ?, payout_error = '' WHERE id = ?", transfer.id, l.id);
+    } catch (e) {
+      console.error(`Payout for job ${l.id} failed:`, e.message);
+      run("UPDATE listings SET payout_status = 'failed', payout_error = ? WHERE id = ?", String(e.message || 'Transfer failed').slice(0, 300), l.id);
+    }
+  }
+  const payouts = new Set();
+  function payHauler(listingId) {
+    const p = sendPayout(listingId).catch((e) => console.error(e)).finally(() => payouts.delete(p));
+    payouts.add(p);
+    return p;
+  }
+  function payWaitingJobs(userId) {
+    const ids = q("SELECT id FROM listings WHERE winner_id = ? AND status = 'paid' AND payout_status IN ('', 'pending', 'failed')", userId).map((r) => r.id);
+    return Promise.all(ids.map(payHauler));
+  }
+  // Store what Stripe says about a hauler's account; once it can receive money, send anything waiting.
+  function syncAccount(acct) {
+    if (!acct || !acct.id) return null;
+    const enabled = Boolean(acct.capabilities && acct.capabilities.transfers === 'active');
+    const u = one('SELECT id, payouts_enabled FROM users WHERE stripe_account_id = ?', acct.id);
+    if (!u) return null;
+    run('UPDATE users SET payouts_enabled = ?, payouts_details_submitted = ? WHERE id = ?', enabled ? 1 : 0, acct.details_submitted ? 1 : 0, u.id);
+    if (enabled) payWaitingJobs(u.id);
+    return { enabled, detailsSubmitted: Boolean(acct.details_submitted), bankPayouts: Boolean(acct.payouts_enabled) };
   }
   // Store a subscription's state against the user and plan it belongs to.
   function syncSubscription(sub, userId, planHint) {
@@ -262,6 +329,8 @@ function createApp(opts = {}) {
       } else if (o.payment_status === 'paid') {
         markPaid(Number(o.metadata && o.metadata.listing_id), o.id);
       }
+    } else if (event.type === 'account.updated') {
+      syncAccount(o);
     } else if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted' || event.type === 'customer.subscription.created') {
       syncSubscription(o);
     }
@@ -553,7 +622,7 @@ function createApp(opts = {}) {
       paidJobs: paid.length,
       jobValueCents: paid.reduce((t, l) => t + l.winning_bid_cents, 0),
       feesEarnedCents: paid.reduce((t, l) => t + jobFees(l).platformCents, 0),
-      owedToHaulersCents: paid.reduce((t, l) => t + jobFees(l).providerPayoutCents, 0),
+      owedToHaulersCents: paid.filter((l) => l.payout_status !== 'sent' && l.payout_status !== 'demo').reduce((t, l) => t + jobFees(l).providerPayoutCents, 0),
       subscribers: { plus, pro },
       monthlySubscriptionCents: plus * config.plusPricePence + pro * config.proPricePence,
     });
@@ -573,7 +642,7 @@ function createApp(opts = {}) {
           customer: { name: l.seller_name, email: l.seller_email },
           hauler: l.winner_name ? { name: l.winner_name, email: l.winner_email } : null,
           bids: l.bid_count, budgetCents: l.start_price_cents, winningBidCents: l.winning_bid_cents,
-          feesCents: f ? f.platformCents : null, haulerPayoutCents: f ? f.providerPayoutCents : null,
+          feesCents: f ? f.platformCents : null, haulerPayoutCents: f ? f.providerPayoutCents : null, payoutStatus: l.payout_status || null,
         };
       }),
     });
@@ -726,6 +795,73 @@ function createApp(opts = {}) {
     res.json({ selling, bidding });
   });
 
+  // ---------- hauler payouts ----------
+  const payoutJobs = (uid) => q("SELECT * FROM listings WHERE winner_id = ? AND status = 'paid' ORDER BY created_at DESC", uid)
+    .map((l) => ({ id: l.id, title: l.title, payoutCents: jobFees(l).providerPayoutCents, status: l.payout_status || 'pending', collectBy: l.collect_by }));
+
+  app.get('/api/me/payouts', auth(true), wrap(async (req, res) => {
+    let u = req.user;
+    let bankPayouts = null;
+    if (config.stripe && u.stripe_account_id && u.stripe_account_id !== 'demo') {
+      try {
+        const s = syncAccount(await config.stripe.accounts.retrieve(u.stripe_account_id));
+        if (s) bankPayouts = s.bankPayouts;
+      } catch (e) { console.error('Could not refresh payout account:', e.message); }
+      await Promise.all([...payouts]);
+      u = one(`SELECT ${USER_COLS} FROM users WHERE id = ?`, u.id);
+    }
+    const jobs = payoutJobs(u.id);
+    res.json({
+      available: Boolean(config.stripe || config.demoPayments),
+      connected: Boolean(u.stripe_account_id),
+      enabled: Boolean(u.payouts_enabled),
+      detailsSubmitted: Boolean(u.payouts_details_submitted),
+      bankPayouts,
+      jobs,
+      sentCents: jobs.filter((j) => j.status === 'sent' || j.status === 'demo').reduce((t, j) => t + j.payoutCents, 0),
+      waitingCents: jobs.filter((j) => j.status !== 'sent' && j.status !== 'demo').reduce((t, j) => t + j.payoutCents, 0),
+    });
+  }));
+
+  // Start (or continue) Stripe's onboarding, where the hauler adds their bank or debit card.
+  app.post('/api/me/payouts/setup', auth(true), wrap(async (req, res) => {
+    const u = req.user;
+    if (!config.stripe) {
+      if (!config.demoPayments) throw new HttpError(503, 'Payouts are not configured yet');
+      run("UPDATE users SET stripe_account_id = 'demo', payouts_enabled = 1, payouts_details_submitted = 1 WHERE id = ?", u.id);
+      return res.json({ demo: true });
+    }
+    let accountId = u.stripe_account_id;
+    if (!accountId) {
+      const acct = await config.stripe.accounts.create({
+        type: 'express',
+        country: 'GB',
+        email: u.email,
+        capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
+        business_profile: { product_description: 'Waste collection jobs won on Waste Warrior Bidding' },
+        metadata: { user_id: String(u.id) },
+      });
+      accountId = acct.id;
+      run('UPDATE users SET stripe_account_id = ? WHERE id = ?', accountId, u.id);
+    }
+    const link = await config.stripe.accountLinks.create({
+      account: accountId,
+      type: 'account_onboarding',
+      refresh_url: `${config.baseUrl}/#/payouts?retry=1`,
+      return_url: `${config.baseUrl}/#/payouts?done=1`,
+    });
+    res.json({ url: link.url });
+  }));
+
+  // Stripe's own page where a hauler sees their balance and changes their bank or card.
+  app.post('/api/me/payouts/dashboard', auth(true), wrap(async (req, res) => {
+    const u = req.user;
+    if (!config.stripe || !u.stripe_account_id || u.stripe_account_id === 'demo') throw new HttpError(409, 'Set up payouts first');
+    if (!u.payouts_details_submitted) throw new HttpError(409, 'Finish setting up payouts first');
+    const link = await config.stripe.accounts.createLoginLink(u.stripe_account_id);
+    res.json({ url: link.url });
+  }));
+
   // ---------- static ----------
   app.use('/uploads', express.static(uploadDir, {
     maxAge: '30d', immutable: true, index: false, dotfiles: 'deny',
@@ -746,6 +882,13 @@ function createApp(opts = {}) {
     res.status(500).json({ error: 'Something went wrong' });
   });
 
+  // Send any payouts that were waiting or failed when the server last stopped.
+  if (config.stripe) {
+    run("UPDATE listings SET payout_status = 'failed' WHERE payout_status = 'sending'");
+    for (const r of q("SELECT DISTINCT winner_id FROM listings WHERE status = 'paid' AND payout_status IN ('pending', 'failed')")) payWaitingJobs(r.winner_id);
+  }
+
+  app.payoutsSettled = () => Promise.all([...payouts]);
   app.close = () => { clearInterval(timer); db.close(); };
   app.db = db;
   return app;
