@@ -201,14 +201,19 @@ test('customer can decline the lowest bid', async () => {
   assert.equal((await api('POST', `/api/listings/${id}/checkout`, { cookie: customer })).status, 409);
 });
 
-test('anti-sniping extends a nearly-finished auction', async () => {
+test('late bids do not extend the auction; it ends at the advertised time', async () => {
   const seller = (await register('seller3')).cookie;
   const b = (await register('bidder3')).cookie;
   const { json: { id } } = await api('POST', '/api/listings', { cookie: seller, form: listingForm() });
-  app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() + 30_000, id);
-  await api('POST', `/api/listings/${id}/bids`, { cookie: b, body: { amount: 90 } });
+  const endsAt = Date.now() + 30_000;
+  app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(endsAt, id);
+  assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: b, body: { amount: 90 } })).status, 201);
   const { json } = await api('GET', `/api/listings/${id}`);
-  assert.ok(json.listing.endsAt > Date.now() + 90_000);
+  assert.equal(json.listing.endsAt, endsAt);
+  // once the time is up, no more bids
+  app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1, id);
+  const late = (await register('bidder3b')).cookie;
+  assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: late, body: { amount: 80 } })).status, 409);
 });
 
 test('expired listing with no bids; webhook rejects bad signature', async () => {

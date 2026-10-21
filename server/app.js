@@ -538,9 +538,8 @@ function createApp(opts = {}) {
       if (max < 100) throw new HttpError(409, 'Bids can’t go any lower on this job');
       if (cents > max) throw new HttpError(409, `Bid must be £${(max / 100).toFixed(2)} or less`);
       if (cents < 100) throw new HttpError(400, 'Bids must be at least £1');
+      // Bidding always ends at the advertised time: late bids never extend the clock.
       run('INSERT INTO bids (listing_id, user_id, amount_cents, created_at) VALUES (?, ?, ?, ?)', id, req.user.id, cents, now());
-      // Anti-sniping: a bid in the last 2 minutes extends the auction by 2 minutes.
-      if (l.ends_at - now() < 120_000) run('UPDATE listings SET ends_at = ? WHERE id = ?', now() + 120_000, id);
     });
     res.status(201).json({ ok: true });
   });

@@ -190,7 +190,7 @@
         h('h2', { text: 'How it works' }),
         h('div', { class: 'steps' },
           h('div', { class: 'step' }, h('div', { class: 'n', text: '1' }), h('h3', { text: 'Post your job' }), h('p', { class: 'muted', text: 'Say what needs clearing, how much there is, when it can be collected and how to get to it. Add photos and your maximum budget.' })),
-          h('div', { class: 'step' }, h('div', { class: 'n', text: '2' }), h('h3', { text: 'Providers bid it down' }), h('p', { class: 'muted', text: 'Each new bid has to beat the lowest one. Late bids extend the clock so you always get the best price.' })),
+          h('div', { class: 'step' }, h('div', { class: 'n', text: '2' }), h('h3', { text: 'Providers bid it down' }), h('p', { class: 'muted', text: 'Each new bid has to beat the lowest one. Bidding ends at the time shown, and the lowest bid at that moment wins.' })),
           h('div', { class: 'step' }, h('div', { class: 'n', text: '3' }), h('h3', { text: 'Accept and pay' }), h('p', { class: 'muted', text: 'When bidding closes, accept the lowest bid and pay by card. The provider then gets your address and collects on your dates.' })))),
       h('section', { class: 'block', id: 'browse-wrap' },
         h('h2', { id: 'browse', text: 'Open jobs' }),

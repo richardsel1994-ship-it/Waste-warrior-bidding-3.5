@@ -4,7 +4,7 @@ A reverse-auction marketplace for waste removal. A customer posts a job, local p
 
 - **Jobs** – waste type, how much (single item up to skip-sized), collection dates, access notes, up to 4 photos and a maximum budget
 - **Private address** – bidders only see the town or postcode area; the full address and contact details go to the winning provider once the customer has paid
-- **Reverse bidding** – each bid must undercut the lowest by at least 50p, countdowns, bid history, anti-sniping (late bids extend bidding by 2 minutes)
+- **Reverse bidding** – each bid must undercut the lowest by at least 50p, countdowns, bid history, and bidding always ends at the advertised time (late bids don't extend the clock)
 - **Accept and pay** – when bidding closes the customer accepts the lowest bid and pays by card through Stripe Checkout (or declines it); confirmed by webhook and by direct verification on return
 - **Platform fee** – 10% added to the customer's price at checkout and 10% taken from the provider's bid (set `PLATFORM_FEE_PERCENT` to change it). Each Stripe payment records the provider's payout and your fee in its metadata
 - **Waste Warrior Plus** – a £2.95/month subscription (`#/plus`) for customers that lowers their service fee from 10% to 6%. Billed by Stripe; cancel any time and keep Plus to the end of the paid month. Set `STRIPE_PLUS_PRICE_ID` to the monthly Stripe price, and add the `customer.subscription.updated` and `customer.subscription.deleted` events to the Stripe webhook
