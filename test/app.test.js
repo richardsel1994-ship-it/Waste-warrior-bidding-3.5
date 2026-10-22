@@ -657,10 +657,13 @@ test('customer can choose any hauler’s bid, not only the lowest', async () => 
 });
 
 test('choices show each hauler’s recent written reviews and flag the top rated', async () => {
-  const customer = (await register('revc')).cookie;
-  const cheap = (await register('revcheap')).cookie;
-  const good = (await register('revgood')).cookie;
-  const ids = Object.fromEntries(['revc', 'revcheap', 'revgood'].map((n) => [n, app.db.prepare('SELECT id FROM users WHERE email = ?').get(`${n}@x.com`).id]));
+  // Accounts are made directly and signed in with a token: the tests already use most of the sign-up rate limit.
+  const ids = {}, cookieFor = {};
+  for (const n of ['revc', 'revcheap', 'revgood']) {
+    ids[n] = Number(app.db.prepare("INSERT INTO users (email, name, password_hash, created_at) VALUES (?, ?, 'x', ?)").run(`${n}@x.com`, `${n} user`, Date.now()).lastInsertRowid);
+    cookieFor[n] = `token=${require('jsonwebtoken').sign({ sub: ids[n] }, 'test', { expiresIn: '1h' })}`;
+  }
+  const customer = cookieFor.revc, cheap = cookieFor.revcheap, good = cookieFor.revgood;
   // past jobs for the reviews to hang off
   const pastJob = () => Number(app.db.prepare("INSERT INTO listings (seller_id, title, description, category, location, start_price_cents, ends_at, status, created_at) VALUES (?, 'old', 'old', 'Household', 'Hull', 1000, 0, 'paid', 0)").run(ids.revc).lastInsertRowid);
   const review = (hauler, rating, comment, at) => app.db.prepare('INSERT INTO reviews (listing_id, hauler_id, customer_id, rating, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(pastJob(), hauler, ids.revc, rating, comment, at);
