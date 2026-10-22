@@ -299,7 +299,7 @@ test('carrier checker reads the register record and classifies numbers', async (
 
 test('haulers: verify a number, show it on bids and the haulers list', async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-c-'));
-  const a = createApp({ dataDir: d, jwtSecret: 't', demoPayments: true, carrierChecker: createCarrierChecker({ fetchImpl: fakeRegister }) });
+  const a = createApp({ dataDir: d, jwtSecret: 't', requirePriceGuide: false, demoPayments: true, carrierChecker: createCarrierChecker({ fetchImpl: fakeRegister }) });
   const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
   const b = `http://localhost:${srv.address().port}`;
   const call = async (method, url, body, cookie) => {
@@ -375,7 +375,7 @@ test('plus: subscribers pay the lower customer fee; providers still pay the stan
     },
     webhooks: { constructEvent: () => { throw new Error('bad'); } },
   };
-  const a = createApp({ dataDir: d, jwtSecret: 't', stripe, plusPriceId: 'price_plus', requireCarrier: false });
+  const a = createApp({ dataDir: d, jwtSecret: 't', requirePriceGuide: false, stripe, plusPriceId: 'price_plus', requireCarrier: false });
   const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
   const b = `http://localhost:${srv.address().port}`;
   const call = async (method, url, body, cookie) => {
@@ -437,7 +437,7 @@ test('plus: subscribers pay the lower customer fee; providers still pay the stan
 
 test('hauler pro: subscribed haulers have a lower fee taken from their winning bid', async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-pro-'));
-  const a = createApp({ dataDir: d, jwtSecret: 't', demoPayments: true, stripeKey: '', requireCarrier: false });
+  const a = createApp({ dataDir: d, jwtSecret: 't', requirePriceGuide: false, demoPayments: true, stripeKey: '', requireCarrier: false });
   const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
   const b = `http://localhost:${srv.address().port}`;
   const call = async (method, url, body, cookie) => {
@@ -478,7 +478,7 @@ test('hauler pro: subscribed haulers have a lower fee taken from their winning b
 
 test('admin: only admin accounts can see everything and remove jobs', async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-adm-'));
-  const a = createApp({ dataDir: d, jwtSecret: 't', demoPayments: true, stripeKey: '', adminEmails: 'Boss@X.com' });
+  const a = createApp({ dataDir: d, jwtSecret: 't', requirePriceGuide: false, demoPayments: true, stripeKey: '', adminEmails: 'Boss@X.com' });
   const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
   const b = `http://localhost:${srv.address().port}`;
   const call = async (method, url, cookie) => {
