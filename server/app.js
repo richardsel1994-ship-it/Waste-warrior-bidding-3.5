@@ -508,6 +508,11 @@ function createApp(opts = {}) {
     if (address.length < 5 || address.length > 200) throw new HttpError(400, 'Enter the collection address');
     if (accessNotes.length > 500) throw new HttpError(400, 'Access notes must be under 500 characters');
     if (!Number.isInteger(startCents) || startCents < 100 || startCents > 100_000_00) throw new HttpError(400, 'Maximum budget must be between £1 and £100,000');
+    // Jobs priced with the price guide can't start above the lowest regular price with other waste companies.
+    let guideCounts = {};
+    try { guideCounts = JSON.parse(b.guideItems || '{}'); } catch { throw new HttpError(400, 'Price guide items are not valid'); }
+    const guide = prices.estimate(guideCounts && typeof guideCounts === 'object' ? guideCounts : {});
+    if (guide && startCents > guide.low * 100) throw new HttpError(400, `The starting price can’t be more than £${guide.low}, the lowest regular price with other waste companies for these items`);
     if (!Number.isInteger(hours) || hours < 1 || hours >= 24) throw new HttpError(400, 'Choose a bidding time between 1 and 23 hours');
     const { collectFrom, collectBy } = parseDates(b.collectFrom, b.collectBy, now() + hours * 3600_000);
     const files = req.files || [];

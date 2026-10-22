@@ -239,6 +239,7 @@
     const counts = {};
     const items = guideItems();
     const total = h('div', { class: 'pg-total', 'aria-live': 'polite' });
+    const hidden = h('input', { type: 'hidden', name: 'guideItems', value: '{}' });
     let auto = { budget: true, title: true, description: true };
     const budget = () => form.elements.startPrice, title = () => form.elements.title, desc = () => form.elements.description;
     function summary() {
@@ -247,11 +248,18 @@
     function update() {
       const est = guideEstimate(counts);
       const list = summary();
-      if (!est) { total.replaceChildren(h('span', { class: 'hint', text: 'Tap + on what you need cleared and we’ll suggest a starting price.' })); return; }
+      hidden.value = JSON.stringify(counts);
+      if (!est) {
+        budget().removeAttribute('max');
+        total.replaceChildren(h('span', { class: 'hint', text: 'Tap + on what you need cleared and we’ll set the starting price.' }));
+        return;
+      }
+      // Bidding can't start above the lowest regular price, so every bid beats other waste companies.
+      budget().max = est.low;
+      if (auto.budget || Number(budget().value) > est.low) budget().value = est.low;
       total.replaceChildren(
-        h('div', {}, h('span', { text: 'Suggested starting price ' }), h('b', { text: pounds(est.high) })),
-        h('div', { class: 'hint', text: `Regular price with other waste companies: ${rangeOf([est.low, est.high])}. Bids start at your price and go down.` }));
-      if (auto.budget) budget().value = est.high;
+        h('div', {}, h('span', { text: 'Starting price ' }), h('b', { text: pounds(est.low) })),
+        h('div', { class: 'hint', text: `Regular price with other waste companies: ${rangeOf([est.low, est.high])}. Bidding starts at the lowest of these and only goes down. You can start lower, but not higher.` }));
       if (auto.title) title().value = list.join(', ').replace(/^./, (c) => c.toUpperCase()).slice(0, 80);
       if (auto.description) desc().value = `To clear:\n${list.map((l) => `• ${l}`).join('\n')}`;
     }
@@ -277,7 +285,7 @@
     return h('div', { class: 'full pg' },
       h('strong', { text: 'What needs clearing?' }),
       h('p', { class: 'hint', text: 'Add your items to get a suggested starting price. You can change anything afterwards.' }),
-      ...groups, total,
+      ...groups, total, hidden,
       h('p', { class: 'hint pg-src', text: pg.sourceNote }));
   }
 

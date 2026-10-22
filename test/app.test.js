@@ -737,3 +737,16 @@ test('price guide: researched regular prices replace the old estimates and sugge
   assert.match(hull, /Regular price with other waste companies/);
   assert.doesNotMatch(hull, /£1\.50–£3\.00/);
 });
+
+test('jobs priced with the guide cannot start above the lowest regular price', async () => {
+  const uid = app.db.prepare('SELECT id FROM users WHERE email = ?').get('choosec@x.com').id;
+  const customer = `token=${require('jsonwebtoken').sign({ sub: uid }, 'test', { expiresIn: '1h' })}`;
+  const items = JSON.stringify({ fridge: 1 }); // regular price £40–£115
+  const tooHigh = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '41', guideItems: items }) });
+  assert.equal(tooHigh.status, 400);
+  assert.match(tooHigh.json.error, /£40/);
+  assert.equal((await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '40', guideItems: items }) })).status, 201);
+  assert.equal((await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '25', guideItems: items }) })).status, 201);
+  // without the guide the customer sets their own price as before
+  assert.equal((await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '90' }) })).status, 201);
+});
