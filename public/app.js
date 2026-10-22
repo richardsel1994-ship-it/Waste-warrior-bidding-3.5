@@ -577,11 +577,19 @@
       const list = h('div', { class: 'choices', role: 'radiogroup', 'aria-label': 'Choose a hauler' }, ...choices.map((c, i) => {
         const input = h('input', { type: 'radio', name: 'choice', value: String(i), checked: i === 0 });
         input.addEventListener('change', () => { picked = c; drawPick(); });
-        return h('label', { class: 'choice' }, input,
+        const label = h('label', { class: 'choice' }, input,
           h('span', { class: 'grow' },
             h('b', { text: c.bidder }), ' ', c.carrier && c.carrier.verified ? h('span', { class: 'reg ok', text: '✔ Registered carrier' }) : null,
             h('span', { class: 'hint' }, stars(c.rating), c.jobsDone ? ` · ${c.jobsDone} job${c.jobsDone === 1 ? '' : 's'} done` : (c.rating ? '' : 'New on Waste Warrior'))),
-          h('span', { class: 'choice-price' }, h('b', { text: money(c.amountCents) }), c.lowest ? h('span', { class: 'tiny', text: 'Lowest' }) : null));
+          h('span', { class: 'choice-price' }, h('b', { text: money(c.amountCents) }),
+            c.lowest ? h('span', { class: 'tiny', text: 'Lowest' }) : null,
+            c.topRated ? h('span', { class: 'tiny top', text: '★ Top rated' }) : null));
+        // What earlier customers said, kept outside the label so opening it doesn't change the choice.
+        const said = c.reviews && c.reviews.length ? h('details', { class: 'said' },
+          h('summary', { text: `What customers said about ${c.bidder}` }),
+          ...c.reviews.map((r) => h('blockquote', {}, stars({ average: r.rating }), h('p', { text: `“${r.comment}”` }),
+            h('span', { class: 'hint', text: `${r.by}, ${new Date(r.createdAt).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}` })))) : null;
+        return h('div', { class: 'choice-wrap' }, label, said);
       }));
       drawPick();
       btn.addEventListener('click', async () => {

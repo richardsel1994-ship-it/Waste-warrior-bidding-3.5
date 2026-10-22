@@ -54,6 +54,13 @@
 .choice .grow { display: grid; gap: 2px; min-width: 0; }
 .choice-price { display: grid; justify-items: end; }
 .choice-price b { font-size: 1.15rem; }
+.choice-price .top { color: #b07f00; font-weight: 700; }
+@media (prefers-color-scheme: dark) { .choice-price .top { color: #e6a700; } }
+.said { margin: 4px 4px 0; font-size: .9rem; }
+.said summary { cursor: pointer; color: var(--brand-dark); font-weight: 600; padding: 4px 0; }
+@media (prefers-color-scheme: dark) { .said summary { color: var(--text); } }
+.said blockquote { margin: 6px 0; padding: 8px 10px; border-left: 3px solid var(--line); background: var(--surface); }
+.said blockquote p { margin: 2px 0; }
 .stars { color: #e6a700; white-space: nowrap; font-size: .9rem; }
 .stars .n { color: var(--muted); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

@@ -656,6 +656,28 @@ test('customer can choose any hauler’s bid, not only the lowest', async () => 
   assert.equal((await api('GET', `/api/listings/${id}`, { cookie: cheap })).json.listing.contact, undefined);
 });
 
+test('choices show each hauler’s recent written reviews and flag the top rated', async () => {
+  const customer = (await register('revc')).cookie;
+  const cheap = (await register('revcheap')).cookie;
+  const good = (await register('revgood')).cookie;
+  const ids = Object.fromEntries(['revc', 'revcheap', 'revgood'].map((n) => [n, app.db.prepare('SELECT id FROM users WHERE email = ?').get(`${n}@x.com`).id]));
+  // past jobs for the reviews to hang off
+  const pastJob = () => Number(app.db.prepare("INSERT INTO listings (seller_id, title, description, category, location, start_price_cents, ends_at, status, created_at) VALUES (?, 'old', 'old', 'Household', 'Hull', 1000, 0, 'paid', 0)").run(ids.revc).lastInsertRowid);
+  const review = (hauler, rating, comment, at) => app.db.prepare('INSERT INTO reviews (listing_id, hauler_id, customer_id, rating, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(pastJob(), hauler, ids.revc, rating, comment, at);
+  review(ids.revgood, 5, 'Quick and tidy', 3);
+  review(ids.revgood, 5, '', 2);
+  review(ids.revcheap, 2, 'Left bits behind', 1);
+  const { json: { id } } = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '100' }) });
+  await api('POST', `/api/listings/${id}/bids`, { cookie: good, body: { amount: 80 } });
+  await api('POST', `/api/listings/${id}/bids`, { cookie: cheap, body: { amount: 70 } });
+  app.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, id);
+  const { choices } = (await api('GET', `/api/listings/${id}`, { cookie: customer })).json.listing;
+  assert.deepEqual(choices.map((c) => [c.bidder, c.lowest, c.topRated]), [['revcheap user', true, false], ['revgood user', false, true]]);
+  // only reviews with words in them, newest first, signed with a first name
+  assert.deepEqual(choices[1].reviews.map((r) => [r.rating, r.comment, r.by]), [[5, 'Quick and tidy', 'revc']]);
+  assert.equal(choices[1].rating.count, 2);
+});
+
 test('public pages: front page shell, local pages, haulers, terms, privacy, sitemap', async () => {
   const home = await fetch(`${base}/`);
   assert.equal(home.status, 200);

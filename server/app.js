@@ -205,6 +205,10 @@ function createApp(opts = {}) {
     const r = one('SELECT AVG(rating) AS a, COUNT(*) AS n FROM reviews WHERE hauler_id = ?', userId);
     return r && r.n ? { average: Math.round(r.a * 10) / 10, count: r.n } : null;
   }
+  // A hauler's latest written reviews, so customers can see what others said before booking.
+  const recentReviews = (userId) => q(`SELECT r.rating, r.comment, r.created_at, u.name FROM reviews r JOIN users u ON u.id = r.customer_id
+      WHERE r.hauler_id = ? AND r.comment != '' ORDER BY r.created_at DESC LIMIT 3`, userId)
+    .map((r) => ({ rating: r.rating, comment: r.comment, createdAt: r.created_at, by: r.name.trim().split(/\s+/)[0] }));
   const jobsDoneBy = (userId) => one("SELECT COUNT(*) AS n FROM listings WHERE winner_id = ? AND status = 'paid'", userId).n;
 
   // A hauler's waste carrier registration as shown to other people.
@@ -810,9 +814,12 @@ function createApp(opts = {}) {
       out.push({
         bidId: b.id, amountCents: b.amount_cents, bidder: b.name, lowest: out.length === 0,
         carrier: c && { number: c.number, verified: c.verified, registerUrl: c.registerUrl },
-        rating: ratingFor(b.user_id), jobsDone: jobsDoneBy(b.user_id),
+        rating: ratingFor(b.user_id), jobsDone: jobsDoneBy(b.user_id), reviews: recentReviews(b.user_id),
       });
     }
+    // Flag the best-reviewed hauler (highest average, then most reviews) when there is more than one to choose from.
+    const rated = out.filter((c) => c.rating).sort((a, b) => b.rating.average - a.rating.average || b.rating.count - a.rating.count);
+    for (const c of out) c.topRated = out.length > 1 && rated.length > 0 && c === rated[0];
     return out;
   }
 
