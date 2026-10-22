@@ -18,22 +18,15 @@ const TOWNS = [
 ];
 
 const SERVICES = [
-  { slug: 'sofa-removal', name: 'Sofa removal', short: 'sofa', what: 'an old sofa, armchair or corner unit', price: '£25–£60 for a single sofa', tip: 'Measure doorways and say if it comes apart. If it has a fire safety label and is in good condition, mention it: some collectors can pass it on for reuse.' },
-  { slug: 'mattress-removal', name: 'Mattress removal', short: 'mattress', what: 'one or more mattresses or bed bases', price: '£20–£45 per mattress', tip: 'Bag the mattress if it has been stored outside or in a damp garage, and say whether there are stairs.' },
-  { slug: 'fridge-freezer-removal', name: 'Fridge and freezer removal', short: 'fridge or freezer', what: 'a fridge, freezer or other large appliance', price: '£30–£200 depending on size', tip: 'Fridges and freezers contain gases that have to be removed at a licensed site, so they cost more than other items. Defrost and empty it first.' },
-  { slug: 'garden-waste-removal', name: 'Garden waste removal', short: 'garden waste', what: 'hedge cuttings, branches, turf, soil or a full garden clearance', price: '£60–£150 for a van load, £400–£600 for a full clearance', tip: 'Say roughly how many bags or how big the pile is, and whether there is soil or rubble mixed in, as that is much heavier.' },
-  { slug: 'house-clearance', name: 'House clearance', short: 'house clearance', what: 'a whole house, flat, loft or garage', price: 'around £1,000 for a typical house', tip: 'Add photos of every room, and say what (if anything) should be kept, donated or recycled.' },
-  { slug: 'builders-waste-removal', name: 'Builders’ waste removal', short: 'builders’ waste', what: 'rubble, plasterboard, old kitchens and bathroom rip-outs', price: '£250–£400 for a bathroom rip-out', tip: 'Plasterboard and asbestos have to be kept separate. If you suspect asbestos, say so, as it needs a specialist.' },
+  { slug: 'sofa-removal', name: 'Sofa removal', short: 'sofa', what: 'an old sofa, armchair or corner unit', tip: 'Measure doorways and say if it comes apart. If it has a fire safety label and is in good condition, mention it: some collectors can pass it on for reuse.' },
+  { slug: 'mattress-removal', name: 'Mattress removal', short: 'mattress', what: 'one or more mattresses or bed bases', tip: 'Bag the mattress if it has been stored outside or in a damp garage, and say whether there are stairs.' },
+  { slug: 'fridge-freezer-removal', name: 'Fridge and freezer removal', short: 'fridge or freezer', what: 'a fridge, freezer or other large appliance', tip: 'Fridges and freezers contain gases that have to be removed at a licensed site, so they cost more than other items. Defrost and empty it first.' },
+  { slug: 'garden-waste-removal', name: 'Garden waste removal', short: 'garden waste', what: 'hedge cuttings, branches, turf, soil or a full garden clearance', tip: 'Say roughly how many bags or how big the pile is, and whether there is soil or rubble mixed in, as that is much heavier.' },
+  { slug: 'house-clearance', name: 'House clearance', short: 'house clearance', what: 'a whole house, flat, loft or garage', tip: 'Add photos of every room, and say what (if anything) should be kept, donated or recycled.' },
+  { slug: 'builders-waste-removal', name: 'Builders’ waste removal', short: 'builders’ waste', what: 'rubble, plasterboard, old kitchens and bathroom rip-outs', tip: 'Plasterboard and asbestos have to be kept separate. If you suspect asbestos, say so, as it needs a specialist.' },
 ];
 
-const ESTIMATES = [
-  ['Bin bag (each)', '£1.50–£3.00'],
-  ['Single chair', '£10–£30'],
-  ['Fridge', '£30–£200'],
-  ['Bathroom rip-out', '£250–£400'],
-  ['Garden clearance', '£400–£600'],
-  ['House clearance', '£1,000'],
-];
+const prices = require('./prices');
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -120,13 +113,15 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
     <p>By law you have to check that whoever takes your waste is a registered waste carrier. If you hand it to a “man with a van” who dumps it, the council can trace it back to you and you can be fined too.</p>
     <p>On Waste Warrior, only registered waste carriers can bid. Every hauler’s carrier number is checked against the Environment Agency public register and shown as a <b>✔ Registered carrier</b> badge on their bid, so you know who you’re dealing with before you pay.</p></section>`;
 
-  const priceTable = () => `<table class="estimates"><thead><tr><th scope="col">Job type</th><th scope="col">Rough budget</th></tr></thead><tbody>${ESTIMATES.map(([a, b]) => `<tr><th scope="row">${esc(a)}</th><td>${esc(b)}</td></tr>`).join('')}</tbody></table>
-    <p class="hint">Rough guides only. The final price depends on the amount, access and location, and haulers compete to beat your budget.</p>`;
+  // Regular prices with other waste companies, in small writing, from the researched price guide.
+  const priceRows = (ids) => ids.map((id) => `<tr><th scope="row">${esc(prices.labelOf(id))}</th><td class="reg">${esc(prices.rangeText(id))}</td></tr>`).join('');
+  const priceTable = (ids = prices.HEADLINE) => `<table class="estimates"><thead><tr><th scope="col">Job</th><th scope="col">Regular price with other waste companies</th></tr></thead><tbody>${priceRows(ids)}</tbody></table>
+    <p class="hint">${esc(prices.SOURCE_NOTE)} On Waste Warrior, haulers bid below your starting price.</p>`;
 
   const cta = (text) => `<section class="cta"><div><h2>${esc(text)}</h2><p>Post a job in two minutes and let local haulers compete for it.</p></div><a class="btn accent lg" href="/#/register">Post a job free</a></section>`;
 
   const faq = (place) => [
-    [`How much does rubbish removal cost in ${place}?`, 'You set the most you’re willing to pay, and haulers bid below it. Small loads such as a chair or a few bags often go for £10–£30, a full van for £150–£250, and a whole house clearance around £1,000.'],
+    [`How much does rubbish removal cost in ${place}?`, `Other waste companies usually charge around ${prices.rangeText('chair')} for a chair, ${prices.rangeText('van-half')} for a half van load and ${prices.rangeText('house-3')} to clear a 3-bed house. On Waste Warrior you set the most you’ll pay and haulers bid below it.`],
     ['Is it free to post a job?', `Yes. You only pay if you accept a bid. A ${feePercent}% service fee is added at checkout.`],
     ['When does the hauler get my address?', 'Only after you accept their bid and pay. Before that, haulers only see your town or postcode area.'],
     ['Are the haulers licensed?', 'Yes. Only haulers with a waste carrier number verified on the Environment Agency register can bid, and registrations are re-checked regularly.'],
@@ -169,7 +164,7 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
   app.get('/services/:service', (req, res, next) => {
     const s = SERVICES.find((x) => x.slug === req.params.service);
     if (!s) return next();
-    const items = [[`How much does ${s.short} removal cost?`, `As a rough guide, ${s.price}. On Waste Warrior you set your maximum and local haulers bid below it.`], ...faq('Hull').slice(1)];
+    const items = [[`How much does ${s.short} removal cost?`, `Other waste companies usually charge ${(prices.FOR_SERVICE[s.slug] || []).map((id) => `${prices.rangeText(id)} for a ${prices.labelOf(id).toLowerCase()}`).slice(0, 2).join(', or ')}. On Waste Warrior you set your maximum and local haulers bid below it.`], ...faq('Hull').slice(1)];
     res.send(layout(req, {
       title: `${s.name} Hull & East Yorkshire | Lowest bid wins | Waste Warrior`,
       description: `${s.name} in Hull and East Yorkshire. Post ${s.what} with photos, let registered local haulers bid the price down, and pay the lowest bid securely online.`,
@@ -182,7 +177,7 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
         <div class="actions"><a class="btn accent lg" href="/#/register">Post a job free</a></div>
       </div><img class="hero-art" src="/img/van.svg" alt=""></section>
       <section class="block pp-two">
-        <div class="panel"><h2>Typical price</h2><p class="pp-big">${esc(s.price)}</p><p class="hint">A rough guide. Bids often come in lower.</p></div>
+        <div class="panel"><h2>Price guide</h2><table class="estimates small"><tbody>${priceRows(prices.FOR_SERVICE[s.slug] || [])}</tbody></table><p class="hint">${esc(prices.SOURCE_NOTE)} Bids here often come in lower.</p></div>
         <div class="panel"><h2>Tip for a better price</h2><p>${esc(s.tip)}</p></div>
       </section>
       ${howItWorks()}

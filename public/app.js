@@ -157,15 +157,6 @@
       h('button', { class: 'tile', type: 'button', onclick: () => { filters.category = c; drawChips(); load(); document.getElementById('browse').scrollIntoView(); } },
         h('span', { class: 'ico', text: ICONS[c] || '♻' }), h('span', { text: c }))));
     const feature = (ico, title, text) => h('div', { class: 'feature' }, h('div', { class: 'ico', text: ico }), h('h3', { text: title }), h('p', { class: 'muted', text }));
-    const estimates = [
-      ['Bin bag (each)', '£1.50–£3.00'],
-      ['Single chair', '£10–£30'],
-      ['Fridge', '£30–£200'],
-      ['Bathroom rip-out', '£250–£400'],
-      ['Garden clearance', '£400–£600'],
-      ['House clearance', '£1,000'],
-      ['Toxic house clearance with deep clean', '£5,000'],
-    ];
 
     $main.replaceChildren(
       h('section', { class: 'hero' },
@@ -181,13 +172,7 @@
       stats,
       h('section', { class: 'block' },
         h('h2', { text: 'Browse by waste type' }), tiles),
-      h('section', { class: 'block', 'aria-labelledby': 'estimate-title' },
-        h('h2', { id: 'estimate-title', text: 'Rough price guide' }),
-        h('p', { class: 'muted estimate-note', text: 'Use these as starting estimates. The final price depends on the amount of waste, access, and collection location.' }),
-        h('table', { class: 'estimates' },
-          h('thead', {}, h('tr', {}, h('th', { scope: 'col', text: 'Job type' }), h('th', { scope: 'col', text: 'Estimated budget' }))),
-          h('tbody', {}, ...estimates.map(([job, price]) => h('tr', {}, h('th', { scope: 'row', text: job }), h('td', { text: price }))))),
-        h('p', { class: 'hint', text: 'These are rough guides, not guaranteed quotes. Providers compete to offer a lower price.' })),
+      regularPriceSection('estimate-title'),
       h('section', { class: 'block' },
         h('h2', { text: 'How it works' }),
         h('div', { class: 'steps' },
@@ -216,13 +201,89 @@
     pollTimer = setInterval(load, 20000);
   }
 
+  // ---------- price guide ----------
+  // Regular prices with other waste companies (researched figures from the server), shown in small writing.
+  const guideItems = () => new Map((state.config.priceGuide ? state.config.priceGuide.groups : []).flatMap((g) => g.items.map((i) => [i.id, { ...i, group: g.group }])));
+  const pounds = (n) => `£${n.toLocaleString('en-GB')}`;
+  const rangeOf = (p) => `${pounds(p[0])}–${pounds(p[1])}`;
+  function regularPriceSection(headingId) {
+    const pg = state.config.priceGuide;
+    if (!pg) return null;
+    const items = guideItems();
+    return h('section', { class: 'block', 'aria-labelledby': headingId },
+      h('h2', { id: headingId, text: 'Price guide' }),
+      h('table', { class: 'estimates' },
+        h('thead', {}, h('tr', {}, h('th', { scope: 'col', text: 'Job' }), h('th', { scope: 'col', text: 'Regular price with other waste companies' }))),
+        h('tbody', {}, ...pg.headline.filter((id) => items.has(id)).map((id) => h('tr', {}, h('th', { scope: 'row', text: items.get(id).label }), h('td', { class: 'reg', text: rangeOf(items.get(id).price) }))))),
+      h('p', { class: 'hint', text: `${pg.sourceNote} On Waste Warrior, haulers bid below your starting price.` }));
+  }
+  // Same sum as server/prices.js: bags, loads and clearances add up in full; after the dearest single item, others cost less as they go in the same trip.
+  function guideEstimate(counts) {
+    const pg = state.config.priceGuide, items = guideItems(), singles = [];
+    let low = 0, high = 0;
+    for (const [id, n] of Object.entries(counts)) {
+      const it = items.get(id);
+      if (!it || !n) continue;
+      if (pg.bulkGroups.includes(it.group)) { low += it.price[0] * n; high += it.price[1] * n; }
+      else for (let i = 0; i < n; i++) singles.push(it.price);
+    }
+    singles.sort((a, b) => b[1] - a[1]).forEach(([l, hi], i) => { const k = i ? pg.extraShare : 1; low += l * k; high += hi * k; });
+    if (!low && !high) return null;
+    const r5 = (n) => Math.round(n / 5) * 5;
+    return { low: Math.max(pg.minJob[0], r5(low)), high: Math.max(pg.minJob[1], r5(high)) };
+  }
+  // Pick the items to clear; the top of the regular price range becomes the auction's starting price.
+  function priceGuidePicker(form) {
+    const pg = state.config.priceGuide;
+    if (!pg) return null;
+    const counts = {};
+    const items = guideItems();
+    const total = h('div', { class: 'pg-total', 'aria-live': 'polite' });
+    let auto = { budget: true, title: true, description: true };
+    const budget = () => form.elements.startPrice, title = () => form.elements.title, desc = () => form.elements.description;
+    function summary() {
+      return Object.entries(counts).filter(([, n]) => n).map(([id, n]) => `${n} × ${items.get(id).label.toLowerCase()}`);
+    }
+    function update() {
+      const est = guideEstimate(counts);
+      const list = summary();
+      if (!est) { total.replaceChildren(h('span', { class: 'hint', text: 'Tap + on what you need cleared and we’ll suggest a starting price.' })); return; }
+      total.replaceChildren(
+        h('div', {}, h('span', { text: 'Suggested starting price ' }), h('b', { text: pounds(est.high) })),
+        h('div', { class: 'hint', text: `Regular price with other waste companies: ${rangeOf([est.low, est.high])}. Bids start at your price and go down.` }));
+      if (auto.budget) budget().value = est.high;
+      if (auto.title) title().value = list.join(', ').replace(/^./, (c) => c.toUpperCase()).slice(0, 80);
+      if (auto.description) desc().value = `To clear:\n${list.map((l) => `• ${l}`).join('\n')}`;
+    }
+    // Stop filling a field once the customer types in it themselves.
+    form.addEventListener('input', (e) => {
+      if (e.target === budget()) auto.budget = false;
+      if (e.target === title()) auto.title = false;
+      if (e.target === desc()) auto.description = false;
+    });
+    const groups = pg.groups.map((g, gi) => h('details', { class: 'pg-group', open: gi === 0 },
+      h('summary', { text: g.group }),
+      ...g.items.map((it) => {
+        const n = h('output', { class: 'pg-n', text: '0' });
+        const step = (d) => { counts[it.id] = Math.max(0, Math.min(99, (counts[it.id] || 0) + d)); n.textContent = String(counts[it.id]); row.classList.toggle('on', counts[it.id] > 0); update(); };
+        const row = h('div', { class: 'pg-row' },
+          h('div', { class: 'pg-label' }, h('span', { text: it.label }), h('small', { class: 'pg-reg', text: `Regular price with other waste companies: ${rangeOf(it.price)}` })),
+          h('div', { class: 'pg-step' },
+            h('button', { type: 'button', class: 'pg-btn', 'aria-label': `One less ${it.label}`, text: '−', onclick: () => step(-1) }), n,
+            h('button', { type: 'button', class: 'pg-btn', 'aria-label': `One more ${it.label}`, text: '+', onclick: () => step(1) })));
+        return row;
+      })));
+    update();
+    return h('div', { class: 'full pg' },
+      h('strong', { text: 'What needs clearing?' }),
+      h('p', { class: 'hint', text: 'Add your items to get a suggested starting price. You can change anything afterwards.' }),
+      ...groups, total,
+      h('p', { class: 'hint pg-src', text: pg.sourceNote }));
+  }
+
   // ---------- signed-out front page ----------
   // Visitors see how it works, a price guide and a preview of open jobs (waste type, area and price only).
   // Titles, photos, descriptions, addresses and bidding stay members-only.
-  const ESTIMATES = [
-    ['Bin bag (each)', '£1.50–£3.00'], ['Single chair', '£10–£30'], ['Fridge', '£30–£200'],
-    ['Bathroom rip-out', '£250–£400'], ['Garden clearance', '£400–£600'], ['House clearance', '£1,000'],
-  ];
   async function viewWelcome() {
     document.title = 'Waste Warrior Bidding · Cheap rubbish removal in Hull & East Yorkshire';
     const signup = (text, cls) => h('a', { class: cls || 'btn accent lg', href: '#/register', text });
@@ -270,12 +331,7 @@
         h('h2', { text: 'Jobs taking bids now' }),
         h('p', { class: 'muted', text: 'A preview of open jobs. Sign up free to see photos and full details, or to bid.' }),
         grid),
-      h('section', { class: 'block', 'aria-labelledby': 'w-estimate' },
-        h('h2', { id: 'w-estimate', text: 'Rough price guide' }),
-        h('table', { class: 'estimates' },
-          h('thead', {}, h('tr', {}, h('th', { scope: 'col', text: 'Job type' }), h('th', { scope: 'col', text: 'Rough budget' }))),
-          h('tbody', {}, ...ESTIMATES.map(([job, price]) => h('tr', {}, h('th', { scope: 'row', text: job }), h('td', { text: price }))))),
-        h('p', { class: 'hint', text: 'Rough guides, not quotes. Haulers compete to beat your budget.' })),
+      regularPriceSection('w-estimate'),
       h('section', { class: 'pp-callout' },
         h('h2', {}, h('img', { class: 'h-ico', src: '/img/icons/shield.svg', alt: '' }), ' Don’t get fined for someone else’s fly-tipping'),
         h('p', { text: 'By law you have to check that whoever takes your waste is a registered waste carrier. If a “man with a van” dumps it, it can be traced back to you and you can be fined too.' }),
@@ -417,16 +473,14 @@
     drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); });
     input.addEventListener('change', () => { addFiles(input.files); input.value = ''; });
 
-    const f = h('form', { class: 'panel narrow', novalidate: true },
-      h('h2', { text: 'Post a waste removal job' }),
-      h('div', { class: 'form-grid' },
-        h('label', { class: 'full' }, 'What needs clearing?', h('input', { name: 'title', maxlength: 80, required: true, placeholder: 'e.g. Old sofa and 6 bags of garden waste' })),
+    const grid = h('div', { class: 'form-grid' },
+        h('label', { class: 'full' }, 'Job title', h('input', { name: 'title', maxlength: 80, required: true, placeholder: 'e.g. Old sofa and 6 bags of garden waste' })),
         h('label', {}, 'Waste type', h('select', { name: 'category' }, ...state.config.categories.map((c) => h('option', { text: c })))),
         h('label', {}, 'How much?', h('select', { name: 'loadSize' }, ...state.config.loadSizes.map((c) => h('option', { text: c, selected: c === 'Half van' }))),
           h('span', { class: 'hint', text: 'A full van is roughly a 4-yard skip' })),
         h('label', {}, 'Collect from', h('input', { name: 'collectFrom', type: 'date', min: isoDay(0), value: isoDay(3), required: true })),
         h('label', {}, 'Collect by', h('input', { name: 'collectBy', type: 'date', min: isoDay(0), value: isoDay(10), required: true })),
-        h('label', {}, 'Maximum budget (£)', h('input', { name: 'startPrice', type: 'number', min: 1, step: '0.01', required: true }),
+        h('label', {}, 'Starting price (£)', h('input', { name: 'startPrice', type: 'number', min: 1, step: '0.01', required: true }),
           h('span', { class: 'hint' }, `Bids start here and go down. A ${myFee()}% service fee is added when you pay.`,
             !isPlus() && state.config.plus.available ? [' ', h('a', { href: '#/plus', text: `Pay ${state.config.plus.feePercent}% with Plus` })] : null)),
         h('label', {}, 'Bidding open for', h('select', { name: 'durationHours' },
@@ -437,9 +491,14 @@
           h('span', { class: 'hint', text: 'Only shared with the provider you pay' })),
         h('label', { class: 'full' }, 'Access notes', h('textarea', { name: 'accessNotes', maxlength: 500, placeholder: 'e.g. Side gate, 2nd floor with no lift, parking on the street' })),
         h('label', { class: 'full' }, 'Description', h('textarea', { name: 'description', maxlength: 2000, required: true, placeholder: 'What the waste is, roughly how many bags or items, anything heavy or awkward…' })),
-        h('div', { class: 'full' }, h('strong', { text: 'Photos' }), drop, input, previews)),
+        h('div', { class: 'full' }, h('strong', { text: 'Photos' }), drop, input, previews));
+    const f = h('form', { class: 'panel narrow', novalidate: true },
+      h('h2', { text: 'Post a waste removal job' }),
+      grid,
       err,
       h('button', { class: 'btn block', type: 'submit', text: 'Post job' }));
+    const picker = priceGuidePicker(f);
+    if (picker) grid.prepend(picker);
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
       err.textContent = '';

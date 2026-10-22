@@ -717,3 +717,23 @@ test('public overview previews open jobs without private details', async () => {
   // The Hull page counts it as live.
   assert.match(await (await fetch(`${base}/rubbish-removal/hull`)).text(), /job[s]? near Hull taking bids/);
 });
+
+test('price guide: researched regular prices replace the old estimates and suggest a starting price', async () => {
+  const prices = require('../server/prices');
+  // one chair on its own uses the full chair price
+  assert.deepEqual(prices.estimate({ chair: 1 }), { low: 30, high: 50 });
+  // a second item in the same trip costs less; bags add up in full
+  assert.deepEqual(prices.estimate({ chair: 2, bag: 4 }), { low: 75, high: 130 });
+  assert.equal(prices.estimate({}), null);
+  assert.equal(prices.estimate({ nonsense: 3 }), null);
+  const cfg = (await api('GET', '/api/config')).json;
+  assert.ok(cfg.priceGuide.groups.some((g) => g.items.some((i) => i.id === 'shed-medium')));
+  for (const id of cfg.priceGuide.headline) assert.ok(prices.rangeText(id));
+  for (const ids of Object.values(prices.FOR_SERVICE)) for (const id of ids) assert.ok(prices.rangeText(id));
+  const service = await (await fetch(`${base}/services/house-clearance`)).text();
+  assert.match(service, /Regular prices for the same job with other UK waste companies/);
+  assert.match(service, /£600–£1,200/);
+  const hull = await (await fetch(`${base}/rubbish-removal/hull`)).text();
+  assert.match(hull, /Regular price with other waste companies/);
+  assert.doesNotMatch(hull, /£1\.50–£3\.00/);
+});

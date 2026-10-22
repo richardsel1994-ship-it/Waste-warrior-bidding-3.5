@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const prices = require('./prices');
 const nodemailer = require('nodemailer');
 const { openDb, tx } = require('./db');
 const { createCarrierChecker } = require('./carrier');
@@ -462,6 +463,7 @@ function createApp(opts = {}) {
   app.get('/api/config', (req, res) => res.json({
     categories: CATEGORIES,
     loadSizes: LOAD_SIZES,
+    priceGuide: { groups: prices.PRICE_GUIDE, headline: prices.HEADLINE, sourceNote: prices.SOURCE_NOTE, extraShare: prices.EXTRA_ITEM_SHARE, minJob: prices.MIN_JOB, bulkGroups: prices.BULK_GROUPS },
     feePercent: config.feePercent,
     plus: { available: planAvailable('plus'), feePercent: PLANS.plus.feePercent, pricePence: PLANS.plus.pricePence },
     pro: { available: planAvailable('pro'), feePercent: PLANS.pro.feePercent, pricePence: PLANS.pro.pricePence },

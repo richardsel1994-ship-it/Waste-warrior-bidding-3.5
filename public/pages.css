@@ -80,3 +80,20 @@ details.problem textarea { margin-bottom: 8px; }
 .trust li { display: inline-flex; align-items: center; gap: 7px; }
 .trust .ti { width: 18px; height: 18px; }
 .h-ico { width: 26px; height: 26px; display: inline-block; vertical-align: -4px; }
+
+/* Price guide: regular prices with other waste companies, in small writing */
+.estimates td.reg { font-size: .85rem; font-weight: 600; color: var(--muted); }
+.estimates.small th, .estimates.small td { padding: 8px 10px; font-size: .9rem; }
+.pg { display: grid; gap: 8px; }
+.pg-group { border: 2px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.pg-group summary { padding: 10px 12px; font-weight: 700; cursor: pointer; }
+.pg-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); }
+.pg-row.on { background: var(--brand-soft); }
+.pg-label { display: grid; gap: 2px; min-width: 0; font-weight: 400; }
+.pg-reg { font-size: .75rem; color: var(--muted); }
+.pg-step { display: flex; align-items: center; gap: 6px; }
+.pg-btn { width: 36px; height: 36px; padding: 0; border-radius: 50%; border: 2px solid var(--line); background: var(--surface); color: var(--text); font-size: 1.2rem; line-height: 1; cursor: pointer; }
+.pg-n { min-width: 1.5em; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pg-total { padding: 12px; border: 2px solid var(--brand); border-radius: var(--radius); background: var(--surface); }
+.pg-total b { font-size: 1.3rem; }
+.pg-src { font-size: .72rem; }
