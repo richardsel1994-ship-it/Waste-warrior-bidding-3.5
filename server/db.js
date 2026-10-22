@@ -90,6 +90,8 @@ function migrate(db) {
     release_at: 'INTEGER', // when the payout is released if the customer doesn't respond
     problem_at: 'INTEGER', // the customer reported a problem: the payout is held
     problem_note: "TEXT NOT NULL DEFAULT ''",
+    // Bids must come in under this: the lowest regular price with other waste companies (price guide jobs)
+    bid_cap_cents: 'INTEGER',
   };
   for (const [name, type] of Object.entries(add)) {
     if (!cols.includes(name)) db.exec(`ALTER TABLE listings ADD COLUMN ${name} ${type}`);

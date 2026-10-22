@@ -36,7 +36,7 @@ const connectState = { ready: false };
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-'));
-  app = createApp({ dataDir: dir, jwtSecret: 'test', stripe: fakeStripe, requireCarrier: false, mailFrom: 'support@example.com', mailer: { sendMail: async (message) => recoveryEmails.push(message) } });
+  app = createApp({ dataDir: dir, jwtSecret: 'test', stripe: fakeStripe, requireCarrier: false, requirePriceGuide: false, mailFrom: 'support@example.com', mailer: { sendMail: async (message) => recoveryEmails.push(message) } });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://localhost:${server.address().port}`;
 });
@@ -738,15 +738,37 @@ test('price guide: researched regular prices replace the old estimates and sugge
   assert.doesNotMatch(hull, /£1\.50–£3\.00/);
 });
 
-test('jobs priced with the guide cannot start above the lowest regular price', async () => {
-  const uid = app.db.prepare('SELECT id FROM users WHERE email = ?').get('choosec@x.com').id;
-  const customer = `token=${require('jsonwebtoken').sign({ sub: uid }, 'test', { expiresIn: '1h' })}`;
+test('price guide jobs start at the highest regular price and bids must beat the lowest', async () => {
+  const sign = (email) => `token=${require('jsonwebtoken').sign({ sub: app.db.prepare('SELECT id FROM users WHERE email = ?').get(email).id }, 'test', { expiresIn: '1h' })}`;
+  const customer = sign('choosec@x.com'), hauler = sign('cheaph@x.com'), other = sign('goodh@x.com');
   const items = JSON.stringify({ fridge: 1 }); // regular price £40–£115
-  const tooHigh = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '41', guideItems: items }) });
-  assert.equal(tooHigh.status, 400);
-  assert.match(tooHigh.json.error, /£40/);
-  assert.equal((await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '40', guideItems: items }) })).status, 201);
-  assert.equal((await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '25', guideItems: items }) })).status, 201);
-  // without the guide the customer sets their own price as before
-  assert.equal((await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '90' }) })).status, 201);
+  // a typed starting price is ignored: the job starts at the top of the range
+  const { json: { id } } = await api('POST', '/api/listings', { cookie: customer, form: listingForm({ startPrice: '5', guideItems: items }) });
+  const l = (await api('GET', `/api/listings/${id}`, { cookie: hauler })).json.listing;
+  assert.equal(l.startPriceCents, 11500);
+  assert.equal(l.regularLowCents, 4000);
+  assert.equal(l.maxNextBidCents, 3950);
+  // bids have to come in under the lowest regular price
+  const high = await api('POST', `/api/listings/${id}/bids`, { cookie: hauler, body: { amount: 40 } });
+  assert.equal(high.status, 409);
+  assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: hauler, body: { amount: 39.5 } })).status, 201);
+  assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: other, body: { amount: 39.5 } })).status, 409);
+  assert.equal((await api('POST', `/api/listings/${id}/bids`, { cookie: other, body: { amount: 35 } })).status, 201);
+});
+
+test('when the price guide is required, jobs without items are refused', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-req-'));
+  const strict = createApp({ dataDir: d, jwtSecret: 'test', requireCarrier: false });
+  const srv = await new Promise((r) => { const s2 = strict.listen(0, () => r(s2)); });
+  try {
+    const url = `http://localhost:${srv.address().port}`;
+    const uid = Number(strict.db.prepare("INSERT INTO users (email, name, password_hash, created_at) VALUES ('s@x.com', 's user', 'x', 0)").run().lastInsertRowid);
+    const cookie = `token=${require('jsonwebtoken').sign({ sub: uid }, 'test', { expiresIn: '1h' })}`;
+    const post = (form) => fetch(`${url}/api/listings`, { method: 'POST', headers: { cookie }, body: form });
+    const none = await post(listingForm({ startPrice: '90' }));
+    assert.equal(none.status, 400);
+    assert.match((await none.json()).error, /price guide/);
+    assert.equal((await post(listingForm({ guideItems: JSON.stringify({ chair: 1 }) }))).status, 201);
+    assert.equal((await (await fetch(`${url}/api/config`)).json()).requirePriceGuide, true);
+  } finally { srv.close(); strict.close(); fs.rmSync(d, { recursive: true, force: true }); }
 });

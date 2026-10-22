@@ -62,6 +62,8 @@ function createApp(opts = {}) {
     // Accounts that can see and manage everything on the site (comma-separated emails).
     // Only haulers with a verified waste carrier registration can bid (set REQUIRE_VERIFIED_CARRIER=0 to allow anyone).
     requireCarrier: opts.requireCarrier ?? process.env.REQUIRE_VERIFIED_CARRIER !== '0',
+    // Every job must be priced with the price guide (set REQUIRE_PRICE_GUIDE=0 to allow a typed starting price).
+    requirePriceGuide: opts.requirePriceGuide ?? process.env.REQUIRE_PRICE_GUIDE !== '0',
     // After the hauler marks a job collected, the payout is released this many hours later unless the customer
     // confirms sooner (released straight away) or reports a problem (held).
     autoReleaseHours: Number(opts.autoReleaseHours ?? process.env.AUTO_RELEASE_HOURS ?? 24),
@@ -138,6 +140,10 @@ function createApp(opts = {}) {
     return isPro(winner) ? config.proFeePercent : config.feePercent;
   }
 
+  // The most the next bid may be. Price guide jobs start at the highest regular price with other
+  // waste companies, but every bid has to come in under the lowest one.
+  const maxNextBid = (l, lowCents) => lowCents != null ? lowCents - MIN_DECREMENT_CENTS
+    : l.bid_cap_cents ? Math.min(l.start_price_cents, l.bid_cap_cents - MIN_DECREMENT_CENTS) : l.start_price_cents;
   // Lowest price wins; on a tie the earlier bid wins.
   const lowestBid = (listingId) => one('SELECT user_id, amount_cents FROM bids WHERE listing_id = ? ORDER BY amount_cents ASC, id ASC LIMIT 1', listingId);
 
@@ -170,7 +176,7 @@ function createApp(opts = {}) {
       loadSize: l.load_size, location: l.location, accessNotes: l.access_notes,
       collectFrom: l.collect_from, collectBy: l.collect_by, images: JSON.parse(l.images),
       startPriceCents: l.start_price_cents, currentBidCents: current, bidCount: low.n,
-      maxNextBidCents: low.n ? current - MIN_DECREMENT_CENTS : l.start_price_cents,
+      maxNextBidCents: maxNextBid(l, low.n ? current : null), regularLowCents: l.bid_cap_cents || null,
       endsAt: l.ends_at, status: l.status, sellerName: customer.name,
       isSeller, isWinner,
       winnerName: winner ? winner.name : null,
@@ -469,6 +475,7 @@ function createApp(opts = {}) {
     pro: { available: planAvailable('pro'), feePercent: PLANS.pro.feePercent, pricePence: PLANS.pro.pricePence },
     maxImages: MAX_IMAGES,
     requireCarrier: config.requireCarrier,
+    requirePriceGuide: config.requirePriceGuide,
     autoReleaseHours: config.autoReleaseHours,
     paymentMode: config.stripe ? 'stripe' : config.demoPayments ? 'demo' : 'off',
   }));
@@ -498,7 +505,13 @@ function createApp(opts = {}) {
     const location = String(b.location || '').trim();
     const address = String(b.address || '').trim();
     const accessNotes = String(b.accessNotes || '').trim();
-    const startCents = Math.round(Number(b.startPrice) * 100);
+    // Price guide jobs start at the highest regular price with other waste companies for the items picked.
+    let guideCounts = {};
+    try { guideCounts = JSON.parse(b.guideItems || '{}'); } catch { throw new HttpError(400, 'Price guide items are not valid'); }
+    const guide = prices.estimate(guideCounts && typeof guideCounts === 'object' ? guideCounts : {});
+    if (!guide && config.requirePriceGuide) throw new HttpError(400, 'Add the items you need cleared in the price guide');
+    const startCents = guide ? guide.high * 100 : Math.round(Number(b.startPrice) * 100);
+    const capCents = guide ? guide.low * 100 : null;
     const hours = Number(b.durationHours);
     if (title.length < 3 || title.length > 80) throw new HttpError(400, 'Title must be 3-80 characters');
     if (description.length < 10 || description.length > 2000) throw new HttpError(400, 'Description must be 10-2000 characters');
@@ -508,11 +521,6 @@ function createApp(opts = {}) {
     if (address.length < 5 || address.length > 200) throw new HttpError(400, 'Enter the collection address');
     if (accessNotes.length > 500) throw new HttpError(400, 'Access notes must be under 500 characters');
     if (!Number.isInteger(startCents) || startCents < 100 || startCents > 100_000_00) throw new HttpError(400, 'Maximum budget must be between £1 and £100,000');
-    // Jobs priced with the price guide can't start above the lowest regular price with other waste companies.
-    let guideCounts = {};
-    try { guideCounts = JSON.parse(b.guideItems || '{}'); } catch { throw new HttpError(400, 'Price guide items are not valid'); }
-    const guide = prices.estimate(guideCounts && typeof guideCounts === 'object' ? guideCounts : {});
-    if (guide && startCents > guide.low * 100) throw new HttpError(400, `The starting price can’t be more than £${guide.low}, the lowest regular price with other waste companies for these items`);
     if (!Number.isInteger(hours) || hours < 1 || hours >= 24) throw new HttpError(400, 'Choose a bidding time between 1 and 23 hours');
     const { collectFrom, collectBy } = parseDates(b.collectFrom, b.collectBy, now() + hours * 3600_000);
     const files = req.files || [];
@@ -526,10 +534,10 @@ function createApp(opts = {}) {
     files.forEach((f, i) => fs.writeFileSync(path.join(uploadDir, names[i]), f.buffer));
     const r = run(
       `INSERT INTO listings (seller_id, title, description, category, load_size, location, address, access_notes,
-         collect_from, collect_by, start_price_cents, ends_at, images, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         collect_from, collect_by, start_price_cents, bid_cap_cents, ends_at, images, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       req.user.id, title, description, b.category, b.loadSize, location, address, accessNotes,
-      collectFrom, collectBy, startCents, now() + hours * 3600_000, JSON.stringify(names), now());
+      collectFrom, collectBy, startCents, capCents, now() + hours * 3600_000, JSON.stringify(names), now());
     res.status(201).json({ id: Number(r.lastInsertRowid) });
   }));
 
@@ -598,7 +606,7 @@ function createApp(opts = {}) {
       if (l.status !== 'open' || l.ends_at <= now()) throw new HttpError(409, 'Bidding on this job has closed');
       if (l.seller_id === req.user.id) throw new HttpError(403, "You can't bid on your own job");
       const low = lowestBid(id);
-      const max = low ? low.amount_cents - MIN_DECREMENT_CENTS : l.start_price_cents;
+      const max = maxNextBid(l, low ? low.amount_cents : null);
       if (low && low.user_id === req.user.id) throw new HttpError(409, 'You already have the lowest bid');
       if (max < 100) throw new HttpError(409, 'Bids can’t go any lower on this job');
       if (cents > max) throw new HttpError(409, `Bid must be £${(max / 100).toFixed(2)} or less`);

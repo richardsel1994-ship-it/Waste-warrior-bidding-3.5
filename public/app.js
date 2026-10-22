@@ -250,16 +250,16 @@
       const list = summary();
       hidden.value = JSON.stringify(counts);
       if (!est) {
-        budget().removeAttribute('max');
-        total.replaceChildren(h('span', { class: 'hint', text: 'Tap + on what you need cleared and we’ll set the starting price.' }));
+        if (state.config.requirePriceGuide) budget().value = '';
+        total.replaceChildren(h('span', { class: 'hint', text: 'Tap + on each item you need cleared. The starting price is set from them.' }));
         return;
       }
-      // Bidding can't start above the lowest regular price, so every bid beats other waste companies.
-      budget().max = est.low;
-      if (auto.budget || Number(budget().value) > est.low) budget().value = est.low;
+      // The auction starts at the highest regular price, and bids must come in under the lowest.
+      if (state.config.requirePriceGuide || auto.budget) budget().value = est.high;
       total.replaceChildren(
-        h('div', {}, h('span', { text: 'Starting price ' }), h('b', { text: pounds(est.low) })),
-        h('div', { class: 'hint', text: `Regular price with other waste companies: ${rangeOf([est.low, est.high])}. Bidding starts at the lowest of these and only goes down. You can start lower, but not higher.` }));
+        h('div', {}, h('span', { text: 'Bidding starts at ' }), h('b', { text: pounds(est.high) })),
+        h('div', {}, h('span', { text: 'Bids must be under ' }), h('b', { text: pounds(est.low) })),
+        h('div', { class: 'hint', text: `Regular price with other waste companies: ${rangeOf([est.low, est.high])}. Every bid has to beat the cheapest of these.` }));
       if (auto.title) title().value = list.join(', ').replace(/^./, (c) => c.toUpperCase()).slice(0, 80);
       if (auto.description) desc().value = `To clear:\n${list.map((l) => `• ${l}`).join('\n')}`;
     }
@@ -488,7 +488,7 @@
           h('span', { class: 'hint', text: 'A full van is roughly a 4-yard skip' })),
         h('label', {}, 'Collect from', h('input', { name: 'collectFrom', type: 'date', min: isoDay(0), value: isoDay(3), required: true })),
         h('label', {}, 'Collect by', h('input', { name: 'collectBy', type: 'date', min: isoDay(0), value: isoDay(10), required: true })),
-        h('label', {}, 'Starting price (£)', h('input', { name: 'startPrice', type: 'number', min: 1, step: '0.01', required: true }),
+        h('label', {}, 'Starting price (£)', h('input', { name: 'startPrice', type: 'number', min: 1, step: '0.01', required: true, readonly: !!state.config.requirePriceGuide, placeholder: state.config.requirePriceGuide ? 'Set from your items' : null }),
           h('span', { class: 'hint' }, `Bids start here and go down. A ${myFee()}% service fee is added when you pay.`,
             !isPlus() && state.config.plus.available ? [' ', h('a', { href: '#/plus', text: `Pay ${state.config.plus.feePercent}% with Plus` })] : null)),
         h('label', {}, 'Bidding open for', h('select', { name: 'durationHours' },
@@ -511,6 +511,7 @@
       e.preventDefault();
       err.textContent = '';
       if (!files.length) { err.textContent = 'Add at least one photo'; return; }
+      if (state.config.requirePriceGuide && !f.elements.startPrice.value) { err.textContent = 'Add the items you need cleared in the price guide'; return; }
       const btn = f.querySelector('button[type=submit]');
       btn.disabled = true; btn.textContent = 'Uploading…';
       const fd = new FormData(f);
@@ -567,7 +568,7 @@
           const amount = h('input', { type: 'number', step: '0.01', min: 1, max: l.maxNextBidCents / 100, value: (l.maxNextBidCents / 100).toFixed(2), 'aria-label': 'Your price in pounds' });
           const form = h('form', { novalidate: true },
             h('div', { class: 'bid-row' }, amount, h('button', { class: 'btn', type: 'submit', text: 'Place bid' })),
-            h('div', { class: 'hint' }, `Your price for the whole job. Must be ${money(l.maxNextBidCents)} or less. You receive ${100 - myHaulerFee()}% of your bid after our ${myHaulerFee()}% fee.`,
+            h('div', { class: 'hint' }, `Your price for the whole job. Must be ${money(l.maxNextBidCents)} or less${l.regularLowCents && !l.bidCount ? `, under the ${money(l.regularLowCents)} other waste companies charge` : ''}. You receive ${100 - myHaulerFee()}% of your bid after our ${myHaulerFee()}% fee.`,
               !isPro() && state.config.pro.available ? [' ', h('a', { href: '#/plus', text: `Keep ${100 - state.config.pro.feePercent}% with Hauler Pro` })] : null));
           form.addEventListener('submit', async (e) => {
             e.preventDefault();
