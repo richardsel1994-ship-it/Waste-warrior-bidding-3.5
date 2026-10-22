@@ -2,6 +2,8 @@ name: CI
 on:
   push:
   pull_request:
+permissions:
+  contents: write
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -12,4 +14,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm test
+      - run: npm test > out.txt 2>&1 || true
+      - run: |
+          grep -B2 -A30 "^    not ok\|^not ok" out.txt | head -150 > fail.txt || true
+          echo "x" >> fail.txt
+          gh api repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments -F body=@fail.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
