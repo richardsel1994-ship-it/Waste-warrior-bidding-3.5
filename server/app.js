@@ -477,7 +477,7 @@ function createApp(opts = {}) {
   app.get('/api/config', (req, res) => res.json({
     categories: CATEGORIES,
     loadSizes: LOAD_SIZES,
-    priceGuide: { groups: prices.PRICE_GUIDE, headline: prices.HEADLINE, sourceNote: prices.SOURCE_NOTE, extraShare: prices.EXTRA_ITEM_SHARE, minJob: prices.MIN_JOB, bulkGroups: prices.BULK_GROUPS },
+    priceGuide: { groups: prices.PRICE_GUIDE, headline: prices.HEADLINE, sourceNote: prices.SOURCE_NOTE, extraShare: prices.EXTRA_ITEM_SHARE, bulkGroups: prices.BULK_GROUPS },
     feePercent: config.feePercent,
     freeDays: config.freeDays,
     plus: { available: planAvailable('plus'), feePercent: PLANS.plus.feePercent, pricePence: PLANS.plus.pricePence },
