@@ -770,7 +770,12 @@ test('price guide: researched regular prices replace the old estimates and sugge
   // one chair on its own uses the full chair price
   assert.deepEqual(prices.estimate({ chair: 1 }), { low: 30, high: 50 });
   // a second item in the same trip costs less; bags add up in full
-  assert.deepEqual(prices.estimate({ chair: 2, bag: 4 }), { low: 75, high: 130 });
+  assert.deepEqual(prices.estimate({ chair: 2, bag: 4 }), { low: 65, high: 100 });
+  // bin bags are £3 each and a wheelie bin £10; garden clearance is no longer offered
+  assert.deepEqual(prices.estimate({ bag: 10, 'wheelie-bin': 3 }), { low: 60, high: 60 });
+  assert.equal(prices.rangeText('bag'), '£3');
+  assert.equal(prices.rangeText('wheelie-bin'), '£10');
+  assert.ok(!prices.PRICE_GUIDE.some((g) => g.items.some((i) => i.id.startsWith('garden'))));
   assert.equal(prices.estimate({}), null);
   assert.equal(prices.estimate({ nonsense: 3 }), null);
   const cfg = (await api('GET', '/api/config')).json;
@@ -778,7 +783,7 @@ test('price guide: researched regular prices replace the old estimates and sugge
   for (const id of cfg.priceGuide.headline) assert.ok(prices.rangeText(id));
   for (const ids of Object.values(prices.FOR_SERVICE)) for (const id of ids) assert.ok(prices.rangeText(id));
   const service = await (await fetch(`${base}/services/house-clearance`)).text();
-  assert.match(service, /Regular prices for the same job with other UK waste companies/);
+  assert.match(service, /Prices estimated from Google/);
   assert.match(service, /£600–£1,200/);
   const hull = await (await fetch(`${base}/rubbish-removal/hull`)).text();
   assert.match(hull, /Regular price with other waste companies/);

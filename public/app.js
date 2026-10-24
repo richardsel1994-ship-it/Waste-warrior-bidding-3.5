@@ -220,7 +220,7 @@
   // Regular prices with other waste companies (researched figures from the server), shown in small writing.
   const guideItems = () => new Map((state.config.priceGuide ? state.config.priceGuide.groups : []).flatMap((g) => g.items.map((i) => [i.id, { ...i, group: g.group }])));
   const pounds = (n) => `£${n.toLocaleString('en-GB')}`;
-  const rangeOf = (p) => `${pounds(p[0])}–${pounds(p[1])}`;
+  const rangeOf = (p) => (p[0] === p[1] ? pounds(p[0]) : `${pounds(p[0])}–${pounds(p[1])}`);
   function regularPriceSection(headingId) {
     const pg = state.config.priceGuide;
     if (!pg) return null;
@@ -244,8 +244,7 @@
     }
     singles.sort((a, b) => b[1] - a[1]).forEach(([l, hi], i) => { const k = i ? pg.extraShare : 1; low += l * k; high += hi * k; });
     if (!low && !high) return null;
-    const r5 = (n) => Math.round(n / 5) * 5;
-    return { low: Math.max(pg.minJob[0], r5(low)), high: Math.max(pg.minJob[1], r5(high)) };
+    return { low: Math.max(pg.minJob[0], Math.round(low)), high: Math.max(pg.minJob[1], Math.round(high)) };
   }
   // Pick the items to clear; the top of the regular price range becomes the auction's starting price.
   function priceGuidePicker(form) {
