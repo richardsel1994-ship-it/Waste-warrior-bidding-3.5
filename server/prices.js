@@ -1,8 +1,7 @@
 // Typical UK prices (outside London, including VAT) for having waste collected by a
 // licensed carrier, used to suggest a starting price when a customer posts a job.
-// Figures in pounds as [low, high]. Researched October 2026 from:
-//   Fantastic Services cost guides (furniture disposal, rubbish removal, house, garden
-//   and shed clearance) and LoveJunk's fridge disposal guide.
+// Figures in pounds as [low, high], estimated from Google searches of UK waste company prices
+// (October 2026). Bin bags (£3) and wheelie bins (£10) are set flat prices.
 // Items marked `est` had no published figure and are set by comparison with similar items.
 const PRICE_GUIDE = [
   {
@@ -31,7 +30,8 @@ const PRICE_GUIDE = [
   {
     group: 'Bags and loads',
     items: [
-      { id: 'bag', label: 'Bin bag of rubbish or garden waste', price: [5, 10] },
+      { id: 'bag', label: 'Bin bag of rubbish', price: [3, 3] },
+      { id: 'wheelie-bin', label: 'Wheelie bin of rubbish', price: [10, 10] },
       { id: 'van-quarter', label: 'Quarter van load', price: [90, 150] },
       { id: 'van-half', label: 'Half van load', price: [150, 250] },
       { id: 'van-three-quarter', label: 'Three-quarter van load', price: [220, 340] },
@@ -41,9 +41,6 @@ const PRICE_GUIDE = [
   {
     group: 'Clearances',
     items: [
-      { id: 'garden-small', label: 'Garden clearance, small', price: [150, 300] },
-      { id: 'garden-medium', label: 'Garden clearance, medium', price: [300, 600] },
-      { id: 'garden-large', label: 'Garden clearance, large or overgrown', price: [600, 2000] },
       { id: 'shed-small', label: 'Shed removal, small (up to 6×4 ft)', price: [150, 250] },
       { id: 'shed-medium', label: 'Shed removal, medium (up to 8×10 ft)', price: [220, 350] },
       { id: 'shed-large', label: 'Shed removal, large (10×12 ft and up)', price: [300, 400] },
@@ -63,7 +60,7 @@ const BULK_GROUPS = new Set(['Bags and loads', 'Clearances']);
 const MIN_JOB = [30, 50];
 
 const ITEMS = new Map(PRICE_GUIDE.flatMap((g) => g.items.map((i) => [i.id, { ...i, group: g.group }])));
-const round5 = (n) => Math.round(n / 5) * 5;
+const round = (n) => Math.round(n);
 
 // counts: { itemId: quantity }. Returns the typical range in pounds, or null when nothing is picked.
 function estimate(counts) {
@@ -81,30 +78,30 @@ function estimate(counts) {
     low += l * share; high += h * share;
   });
   if (!low && !high) return null;
-  return { low: Math.max(MIN_JOB[0], round5(low)), high: Math.max(MIN_JOB[1], round5(high)) };
+  return { low: Math.max(MIN_JOB[0], round(low)), high: Math.max(MIN_JOB[1], round(high)) };
 }
 
 module.exports = { PRICE_GUIDE, EXTRA_ITEM_SHARE, MIN_JOB, estimate };
 
 const pounds = (n) => `£${n.toLocaleString('en-GB')}`;
-const rangeText = (id) => { const i = ITEMS.get(id); return `${pounds(i.price[0])}–${pounds(i.price[1])}`; };
+const rangeText = (id) => { const [l, h] = ITEMS.get(id).price; return l === h ? pounds(l) : `${pounds(l)}–${pounds(h)}`; };
 const labelOf = (id) => ITEMS.get(id).label;
 
 // The rows shown in the price tables on the front pages.
-const HEADLINE = ['chair', 'sofa', 'mattress', 'fridge', 'cooker', 'washer', 'bag', 'van-half', 'van-full',
-  'garden-small', 'garden-medium', 'shed-medium', 'room', 'house-2', 'house-3'];
+const HEADLINE = ['chair', 'sofa', 'mattress', 'fridge', 'cooker', 'washer', 'bag', 'wheelie-bin', 'van-half', 'van-full',
+  'shed-medium', 'room', 'house-2', 'house-3'];
 
 // The rows shown on each service page.
 const FOR_SERVICE = {
   'sofa-removal': ['sofa', 'sofa-large', 'armchair'],
   'mattress-removal': ['mattress', 'bed'],
   'fridge-freezer-removal': ['fridge', 'fridge-american', 'cooker', 'washer'],
-  'garden-waste-removal': ['bag', 'garden-small', 'garden-medium', 'garden-large', 'shed-small', 'shed-medium'],
+  'garden-waste-removal': ['bag', 'wheelie-bin', 'van-quarter', 'shed-small', 'shed-medium'],
   'house-clearance': ['room', 'house-1', 'house-2', 'house-3', 'house-4'],
   'builders-waste-removal': ['van-quarter', 'van-half', 'van-three-quarter', 'van-full'],
 };
 
-const SOURCE_NOTE = 'Regular prices for the same job with other UK waste companies, from published price guides (Fantastic Services, LoveJunk), October 2026.';
+const SOURCE_NOTE = 'Prices estimated from Google: regular prices for the same job with other UK waste companies, October 2026.';
 
 module.exports.rangeText = rangeText;
 module.exports.labelOf = labelOf;
