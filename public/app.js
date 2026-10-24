@@ -244,7 +244,7 @@
     }
     singles.sort((a, b) => b[1] - a[1]).forEach(([l, hi], i) => { const k = i ? pg.extraShare : 1; low += l * k; high += hi * k; });
     if (!low && !high) return null;
-    return { low: Math.max(pg.minJob[0], Math.round(low)), high: Math.max(pg.minJob[1], Math.round(high)) };
+    return { low: Math.round(low), high: Math.round(high) };
   }
   // Pick the items to clear; the top of the regular price range becomes the auction's starting price.
   function priceGuidePicker(form) {

@@ -57,7 +57,6 @@ const PRICE_GUIDE = [
 // Several items go in one trip, so after the dearest single item the rest cost less.
 const EXTRA_ITEM_SHARE = 0.75;
 const BULK_GROUPS = new Set(['Bags and loads', 'Clearances']);
-const MIN_JOB = [30, 50];
 
 const ITEMS = new Map(PRICE_GUIDE.flatMap((g) => g.items.map((i) => [i.id, { ...i, group: g.group }])));
 const round = (n) => Math.round(n);
@@ -78,10 +77,10 @@ function estimate(counts) {
     low += l * share; high += h * share;
   });
   if (!low && !high) return null;
-  return { low: Math.max(MIN_JOB[0], round(low)), high: Math.max(MIN_JOB[1], round(high)) };
+  return { low: round(low), high: round(high) };
 }
 
-module.exports = { PRICE_GUIDE, EXTRA_ITEM_SHARE, MIN_JOB, estimate };
+module.exports = { PRICE_GUIDE, EXTRA_ITEM_SHARE, estimate };
 
 const pounds = (n) => `£${n.toLocaleString('en-GB')}`;
 const rangeText = (id) => { const [l, h] = ITEMS.get(id).price; return l === h ? pounds(l) : `${pounds(l)}–${pounds(h)}`; };

@@ -773,6 +773,9 @@ test('price guide: researched regular prices replace the old estimates and sugge
   assert.deepEqual(prices.estimate({ chair: 2, bag: 4 }), { low: 65, high: 100 });
   // bin bags are £3 each and a wheelie bin £10; garden clearance is no longer offered
   assert.deepEqual(prices.estimate({ bag: 10, 'wheelie-bin': 3 }), { low: 60, high: 60 });
+  // no job minimum: one bag is £3 and one wheelie bin £10
+  assert.deepEqual(prices.estimate({ bag: 1 }), { low: 3, high: 3 });
+  assert.deepEqual(prices.estimate({ 'wheelie-bin': 1 }), { low: 10, high: 10 });
   assert.equal(prices.rangeText('bag'), '£3');
   assert.equal(prices.rangeText('wheelie-bin'), '£10');
   assert.ok(!prices.PRICE_GUIDE.some((g) => g.items.some((i) => i.id.startsWith('garden'))));
