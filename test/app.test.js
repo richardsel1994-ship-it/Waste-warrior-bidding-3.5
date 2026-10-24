@@ -36,7 +36,7 @@ const connectState = { ready: false };
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-'));
-  app = createApp({ dataDir: dir, jwtSecret: 'test', stripe: fakeStripe, requireCarrier: false, requirePriceGuide: false, mailFrom: 'support@example.com', mailer: { sendMail: async (message) => recoveryEmails.push(message) } });
+  app = createApp({ dataDir: dir, jwtSecret: 'test', stripe: fakeStripe, requireCarrier: false, requirePriceGuide: false, freeDays: 0, mailFrom: 'support@example.com', mailer: { sendMail: async (message) => recoveryEmails.push(message) } });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://localhost:${server.address().port}`;
 });
@@ -375,7 +375,7 @@ test('plus: subscribers pay the lower customer fee; providers still pay the stan
     },
     webhooks: { constructEvent: () => { throw new Error('bad'); } },
   };
-  const a = createApp({ dataDir: d, jwtSecret: 't', requirePriceGuide: false, stripe, plusPriceId: 'price_plus', requireCarrier: false });
+  const a = createApp({ dataDir: d, jwtSecret: 't', requirePriceGuide: false, freeDays: 0, stripe, plusPriceId: 'price_plus', requireCarrier: false });
   const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
   const b = `http://localhost:${srv.address().port}`;
   const call = async (method, url, body, cookie) => {
@@ -437,7 +437,7 @@ test('plus: subscribers pay the lower customer fee; providers still pay the stan
 
 test('hauler pro: subscribed haulers have a lower fee taken from their winning bid', async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-pro-'));
-  const a = createApp({ dataDir: d, jwtSecret: 't', requirePriceGuide: false, demoPayments: true, stripeKey: '', requireCarrier: false });
+  const a = createApp({ dataDir: d, jwtSecret: 't', requirePriceGuide: false, freeDays: 0, demoPayments: true, stripeKey: '', requireCarrier: false });
   const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
   const b = `http://localhost:${srv.address().port}`;
   const call = async (method, url, body, cookie) => {
@@ -471,6 +471,53 @@ test('hauler pro: subscribed haulers have a lower fee taken from their winning b
     await call('POST', '/api/pro/cancel', null, haul);
     a.db.prepare("UPDATE users SET pro_status = 'canceled'").run();
     assert.equal((await call('GET', `/api/listings/${created.id}`, null, haul)).json.listing.providerPayoutCents, 9400);
+  } finally {
+    srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('first month free: new accounts pay no fees, then the standard fees apply', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wwb-free-'));
+  const a = createApp({ dataDir: d, jwtSecret: 't', requirePriceGuide: false, demoPayments: true, stripeKey: '', requireCarrier: false });
+  const srv = await new Promise((r) => { const s = a.listen(0, () => r(s)); });
+  const b = `http://localhost:${srv.address().port}`;
+  const call = async (method, url, body, cookie) => {
+    const res = await fetch(b + url, { method, headers: { ...(cookie ? { cookie } : {}), ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, json: await res.json() };
+  };
+  const reg = async (e, n) => {
+    const res = await fetch(b + '/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: e, name: n, password: 'password123' }) });
+    return { cookie: (res.headers.get('set-cookie') || '').split(';')[0], user: (await res.json()).user };
+  };
+  const job = async (cust, haul, amount) => {
+    const created = await fetch(b + '/api/listings', { method: 'POST', headers: { cookie: cust }, body: listingForm() }).then((r) => r.json());
+    await call('POST', `/api/listings/${created.id}/bids`, { amount }, haul);
+    a.db.prepare('UPDATE listings SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, created.id);
+    return created.id;
+  };
+  try {
+    assert.equal((await call('GET', '/api/config')).json.freeDays, 30);
+    const cust = await reg('fc@x.com', 'Fay Customer');
+    const haul = await reg('fh@x.com', 'Fred Hauler');
+    assert.ok(cust.user.freeUntil > Date.now() + 29 * 86400_000);
+
+    // in the first month: no service fee on top and nothing taken from the bid
+    const id = await job(cust.cookie, haul.cookie, 100);
+    assert.equal((await call('GET', `/api/listings/${id}`, null, cust.cookie)).json.listing.customerTotalCents, 10000);
+    assert.equal((await call('POST', `/api/listings/${id}/checkout`, null, cust.cookie)).status, 200);
+    assert.equal((await call('GET', `/api/listings/${id}`, null, haul.cookie)).json.listing.providerPayoutCents, 10000);
+
+    // once the month is over the standard 10% applies, but the paid job keeps its free fees
+    a.db.prepare('UPDATE users SET created_at = ?').run(Date.now() - 31 * 86400_000);
+    assert.equal((await call('GET', '/api/me', null, cust.cookie)).json.user.freeUntil, null);
+    const later = await job(cust.cookie, haul.cookie, 100);
+    assert.equal((await call('GET', `/api/listings/${later}`, null, cust.cookie)).json.listing.customerTotalCents, 11000);
+    assert.equal((await call('GET', `/api/listings/${later}`, null, haul.cookie)).json.listing.providerPayoutCents, 9000);
+    assert.equal((await call('GET', `/api/listings/${id}`, null, haul.cookie)).json.listing.providerPayoutCents, 10000);
+
+    // the offer strip is on every public page
+    assert.match(await fetch(b + '/').then((r) => r.text()), /first month<\/b>|first month is free/);
+    assert.match(await fetch(b + '/for-haulers').then((r) => r.text()), /offer-strip/);
   } finally {
     srv.close(); a.close(); fs.rmSync(d, { recursive: true, force: true });
   }

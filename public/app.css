@@ -399,3 +399,8 @@ a.card:hover .photo img { transform: none; }
 .payout-status h2 { margin: 0; }
 .payout-status p { margin: 0; }
 .payout-totals { max-width: 680px; }
+
+/* First month free special offer strip, above the header on every page */
+.offer-strip { background: var(--hivis, var(--accent)); color: #0a2259; font-size: .92rem; padding: 8px 0; text-align: center; border-bottom: 2px solid var(--ink, #0a2259); }
+.offer-strip a { color: #0a2259; font-weight: 700; margin-left: 4px; }
+.offer-strip[hidden] { display: none; }

@@ -59,6 +59,8 @@ function createApp(opts = {}) {
     proPriceId: opts.proPriceId !== undefined ? opts.proPriceId : process.env.STRIPE_PRO_PRICE_ID,
     proFeePercent: Number(opts.proFeePercent ?? process.env.PRO_FEE_PERCENT ?? 6),
     proPricePence: Number(opts.proPricePence ?? process.env.PRO_PRICE_PENCE ?? 499),
+    // Special offer: no fees at all (customer or hauler) for this many days after someone signs up. 0 turns it off.
+    freeDays: Number(opts.freeDays ?? process.env.FREE_MONTH_DAYS ?? 30),
     // Accounts that can see and manage everything on the site (comma-separated emails).
     // Only haulers with a verified waste carrier registration can bid (set REQUIRE_VERIFIED_CARRIER=0 to allow anyone).
     requireCarrier: opts.requireCarrier ?? process.env.REQUIRE_VERIFIED_CARRIER !== '0',
@@ -74,6 +76,7 @@ function createApp(opts = {}) {
   if (!(config.feePercent >= 0 && config.feePercent < 50)) throw new Error('PLATFORM_FEE_PERCENT must be between 0 and 49');
   if (!(config.plusFeePercent >= 0 && config.plusFeePercent <= config.feePercent)) throw new Error('PLUS_FEE_PERCENT must be between 0 and PLATFORM_FEE_PERCENT');
   if (!(config.proFeePercent >= 0 && config.proFeePercent <= config.feePercent)) throw new Error('PRO_FEE_PERCENT must be between 0 and PLATFORM_FEE_PERCENT');
+  if (!(config.freeDays >= 0)) throw new Error('FREE_MONTH_DAYS must be 0 or more');
   if (!config.jwtSecret) {
     if (config.production) throw new Error('JWT_SECRET must be set in production');
     config.jwtSecret = crypto.randomBytes(32).toString('hex');
@@ -130,14 +133,19 @@ function createApp(opts = {}) {
   }
   const isPlus = (u) => onPlan(u, 'plus');
   const isPro = (u) => onPlan(u, 'pro');
+  // First month free: when a new account's fee-free period ends (null if the offer doesn't apply).
+  const freeUntil = (u) => (u && u.created_at && config.freeDays ? u.created_at + config.freeDays * 86400_000 : null);
+  const inFreeMonth = (u) => Boolean(freeUntil(u) && freeUntil(u) > now());
+  const customerPctNow = (u) => (inFreeMonth(u) ? 0 : isPlus(u) ? config.plusFeePercent : config.feePercent);
+  const providerPctNow = (u) => (inFreeMonth(u) ? 0 : isPro(u) ? config.proFeePercent : config.feePercent);
   // The fees for a job right now, or the ones fixed when the customer started paying for it.
   function customerPctFor(listing, seller) {
     if (listing.customer_fee_pct != null) return listing.customer_fee_pct;
-    return isPlus(seller) ? config.plusFeePercent : config.feePercent;
+    return customerPctNow(seller);
   }
   function providerPctFor(listing, winner) {
     if (listing.provider_fee_pct != null) return listing.provider_fee_pct;
-    return isPro(winner) ? config.proFeePercent : config.feePercent;
+    return providerPctNow(winner);
   }
 
   // The most the next bid may be. Price guide jobs start at the highest regular price with other
@@ -166,8 +174,8 @@ function createApp(opts = {}) {
 
   function publicListing(l, userId) {
     const low = one('SELECT MIN(amount_cents) AS m, COUNT(*) AS n FROM bids WHERE listing_id = ?', l.id);
-    const customer = one('SELECT name, email, plus_status, plus_until FROM users WHERE id = ?', l.seller_id);
-    const winner = l.winner_id ? one('SELECT name, email, pro_status, pro_until FROM users WHERE id = ?', l.winner_id) : null;
+    const customer = one('SELECT name, email, plus_status, plus_until, created_at FROM users WHERE id = ?', l.seller_id);
+    const winner = l.winner_id ? one('SELECT name, email, pro_status, pro_until, created_at FROM users WHERE id = ?', l.winner_id) : null;
     const current = low.n ? low.m : l.start_price_cents;
     const isSeller = userId === l.seller_id;
     const isWinner = l.winner_id != null && userId === l.winner_id;
@@ -237,10 +245,10 @@ function createApp(opts = {}) {
   const USER_COLS = 'id, email, name, carrier_number, carrier_status, carrier_name, carrier_tier, carrier_expires, carrier_checked_at, '
     + 'stripe_customer_id, plus_subscription_id, plus_status, plus_until, plus_cancel_at_end, plus_session_id, '
     + 'pro_subscription_id, pro_status, pro_until, pro_cancel_at_end, pro_session_id, '
-    + 'stripe_account_id, payouts_enabled, payouts_details_submitted';
+    + 'stripe_account_id, payouts_enabled, payouts_details_submitted, created_at';
   const planJson = (u, p) => ({ active: onPlan(u, p), status: u[`${p}_status`] || null, until: u[`${p}_until`] || null, cancelAtEnd: Boolean(u[`${p}_cancel_at_end`]) });
   const isAdmin = (u) => Boolean(u && config.adminEmails.includes(String(u.email).toLowerCase()));
-  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u), plus: planJson(u, 'plus'), pro: planJson(u, 'pro'), payouts: { connected: Boolean(u.stripe_account_id), enabled: Boolean(u.payouts_enabled) }, admin: isAdmin(u) || undefined } : null);
+  const meJson = (u) => (u ? { id: u.id, email: u.email, name: u.name, carrier: carrierInfo(u), plus: planJson(u, 'plus'), pro: planJson(u, 'pro'), payouts: { connected: Boolean(u.stripe_account_id), enabled: Boolean(u.payouts_enabled) }, freeUntil: inFreeMonth(u) ? freeUntil(u) : null, admin: isAdmin(u) || undefined } : null);
 
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -471,6 +479,7 @@ function createApp(opts = {}) {
     loadSizes: LOAD_SIZES,
     priceGuide: { groups: prices.PRICE_GUIDE, headline: prices.HEADLINE, sourceNote: prices.SOURCE_NOTE, extraShare: prices.EXTRA_ITEM_SHARE, minJob: prices.MIN_JOB, bulkGroups: prices.BULK_GROUPS },
     feePercent: config.feePercent,
+    freeDays: config.freeDays,
     plus: { available: planAvailable('plus'), feePercent: PLANS.plus.feePercent, pricePence: PLANS.plus.pricePence },
     pro: { available: planAvailable('pro'), feePercent: PLANS.pro.feePercent, pricePence: PLANS.pro.pricePence },
     maxImages: MAX_IMAGES,
@@ -722,7 +731,7 @@ function createApp(opts = {}) {
   });
 
   app.get('/api/admin/users', auth(true), adminOnly, (req, res) => {
-    const rows = q(`SELECT ${USER_COLS}, created_at,
+    const rows = q(`SELECT ${USER_COLS},
         (SELECT COUNT(*) FROM listings l WHERE l.seller_id = users.id) AS jobs_posted,
         (SELECT COUNT(*) FROM bids b WHERE b.user_id = users.id) AS bids_placed,
         (SELECT COUNT(*) FROM listings l WHERE l.winner_id = users.id AND l.status = 'paid') AS jobs_won
@@ -857,10 +866,10 @@ function createApp(opts = {}) {
         l = one('SELECT * FROM listings WHERE id = ?', l.id);
       }
     }
-    const seller = one('SELECT plus_status, plus_until FROM users WHERE id = ?', l.seller_id);
-    const winner = one('SELECT pro_status, pro_until FROM users WHERE id = ?', l.winner_id);
-    const pct = isPlus(seller) ? config.plusFeePercent : config.feePercent;
-    const ppct = isPro(winner) ? config.proFeePercent : config.feePercent;
+    const seller = one('SELECT plus_status, plus_until, created_at FROM users WHERE id = ?', l.seller_id);
+    const winner = one('SELECT pro_status, pro_until, created_at FROM users WHERE id = ?', l.winner_id);
+    const pct = customerPctNow(seller);
+    const ppct = providerPctNow(winner);
     if (config.stripe) {
       const f = fees(l.winning_bid_cents, pct, ppct);
       const item = (name, amount) => ({ quantity: 1, price_data: { currency: 'gbp', unit_amount: amount, product_data: { name } } });
@@ -1038,7 +1047,7 @@ function createApp(opts = {}) {
   }));
 
   // ---------- public pages (front page shell, local pages, haulers, terms, privacy, sitemap) ----------
-  registerPublicPages(app, { q, one, config, feePercent: config.feePercent, proFeePercent: config.proFeePercent, proPricePence: config.proPricePence });
+  registerPublicPages(app, { q, one, config, freeDays: config.freeDays, feePercent: config.feePercent, proFeePercent: config.proFeePercent, proPricePence: config.proPricePence });
 
   // ---------- static ----------
   // Job photos are only for signed-in members.

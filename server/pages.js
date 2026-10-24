@@ -30,9 +30,13 @@ const prices = require('./prices');
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, proPricePence }) {
+function registerPublicPages(app, { q, one, config, freeDays, feePercent, proFeePercent, proPricePence }) {
   const baseFor = (req) => (/localhost|127\.0\.0\.1/.test(config.baseUrl) ? `${req.protocol}://${req.get('host')}` : config.baseUrl);
   const money = (p) => `£${(p / 100).toFixed(2).replace(/\.00$/, '')}`;
+  // Special offer strip shown above the header on every page while the first-month-free offer is on.
+  const freeLabel = freeDays === 30 ? 'first month' : `first ${freeDays} days`;
+  const offerBanner = () => (freeDays ? `<div class="offer-strip" role="note"><div class="wrap"><b>Special offer:</b> your ${freeLabel} is free on everything. No service fees and no fees on winning bids for ${freeDays} days after you sign up. <a href="/#/register">Sign up free</a></div></div>` : '');
+  const offerLine = (who) => (freeDays ? ` Special offer: new ${who} pay no fees at all for their ${freeLabel}.` : '');
 
   function openJobsNear(town) {
     const rows = q("SELECT location FROM listings WHERE status = 'open' AND ends_at > ?", Date.now());
@@ -75,6 +79,7 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
+  ${offerBanner()}
   <header class="site-header">
     <div class="wrap bar">
       <a href="/" class="brand"><span class="brand-mark" aria-hidden="true">♻</span> Waste Warrior</a>
@@ -122,7 +127,7 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
 
   const faq = (place) => [
     [`How much does rubbish removal cost in ${place}?`, `Other waste companies usually charge around ${prices.rangeText('chair')} for a chair, ${prices.rangeText('van-half')} for a half van load and ${prices.rangeText('house-3')} to clear a 3-bed house. On Waste Warrior you set the most you’ll pay and haulers bid below it.`],
-    ['Is it free to post a job?', `Yes. You only pay if you accept a bid. A ${feePercent}% service fee is added at checkout.`],
+    ['Is it free to post a job?', `Yes. You only pay if you accept a bid. A ${feePercent}% service fee is added at checkout.${offerLine('customers')}`],
     ['When does the hauler get my address?', 'Only after you accept their bid and pay. Before that, haulers only see your town or postcode area.'],
     ['Are the haulers licensed?', 'Yes. Only haulers with a waste carrier number verified on the Environment Agency register can bid, and registrations are re-checked regularly.'],
     ['Do I have to take the cheapest bid?', 'No. When bidding closes the cheapest bid is picked for you, but you can book any hauler who bid, for example one with better reviews.'],
@@ -192,7 +197,7 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
   app.get('/for-haulers', (req, res) => {
     const keep = 100 - feePercent, keepPro = 100 - proFeePercent;
     const items = [
-      ['Does it cost anything to join?', `No. Signing up and bidding are free. When you win and the customer pays, ${feePercent}% is taken from your bid and you keep ${keep}%.`],
+      ['Does it cost anything to join?', `No. Signing up and bidding are free. When you win and the customer pays, ${feePercent}% is taken from your bid and you keep ${keep}%.${offerLine('haulers')}`],
       ['How do I get paid?', 'Add your bank account or debit card on Stripe’s secure page. The customer pays up front. When you’ve done the job, tap Collected: your share is released as soon as the customer confirms, or automatically after 24 hours, and Stripe pays it into your bank.'],
       ['Do I need a waste carrier licence?', 'Yes. Only registered waste carriers can bid. Anyone collecting other people’s waste needs an upper-tier registration (CBDU…) from the Environment Agency. Add your number and we check it on the public register in seconds.'],
       ['Is there a way to keep more?', `Hauler Pro is ${money(proPricePence)} a month and lowers the fee to ${proFeePercent}%, so you keep ${keepPro}% of every job.`],
@@ -242,7 +247,7 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
       <h2>2. Accounts</h2><p>You must be 18 or over and give accurate details. Keep your password private. You are responsible for what happens on your account.</p>
       <h2>3. Posting a job</h2><p>Describe the waste honestly, including anything hazardous, heavy or hard to reach, and only post photos you have the right to use. Hazardous waste such as asbestos, chemicals or clinical waste must be clearly described and may need a specialist. Bidding closes at the advertised time. You may then book and pay for any hauler’s bid (the lowest is selected by default), or decline them all. Once the waste has been collected, confirm it or report a problem promptly.</p>
       <h2>4. Bidding as a hauler</h2><p>Every bid is a price for the whole job as described. Anyone collecting other people’s waste must hold a valid waste carrier registration and dispose of waste lawfully at licensed sites. If the job differs materially from the description, agree any change with the customer before starting. Do not use details from the site to arrange jobs off the platform.</p>
-      <h2>5. Payments and fees</h2><p>Customers pay through Stripe when they accept a bid. A service fee of ${feePercent}% is added to the customer’s price, and ${feePercent}% is taken from the hauler’s winning bid (lower rates apply to Waste Warrior Plus and Hauler Pro subscribers). The hauler’s share is held until the customer confirms the collection, or until ${config.autoReleaseHours} hours after the hauler marks the job collected if the customer has not reported a problem, and is then paid out through Stripe Connect. Subscriptions renew monthly until cancelled and stay active until the end of the paid month.</p>
+      <h2>5. Payments and fees</h2><p>Customers pay through Stripe when they accept a bid. A service fee of ${feePercent}% is added to the customer’s price, and ${feePercent}% is taken from the hauler’s winning bid (lower rates apply to Waste Warrior Plus and Hauler Pro subscribers).${freeDays ? ` As a special offer, no fees are charged to a customer or hauler on jobs paid for within ${freeDays} days of their account being created.` : ''} The hauler’s share is held until the customer confirms the collection, or until ${config.autoReleaseHours} hours after the hauler marks the job collected if the customer has not reported a problem, and is then paid out through Stripe Connect. Subscriptions renew monthly until cancelled and stay active until the end of the paid month.</p>
       <h2>6. Cancellations and problems</h2><p>If a hauler cannot attend, they must tell the customer as soon as possible. If a job is not carried out, contact us and we will look into refunding the customer. Nothing in these terms affects your statutory rights.</p>
       <h2>7. Our responsibility</h2><p>We check waste carrier numbers against the public register when haulers add them, but we do not supervise the work. To the extent the law allows, we are not liable for the acts of customers or haulers. We do not exclude liability for death or personal injury caused by our negligence, or for fraud.</p>
       <h2>8. Removing content and accounts</h2><p>We may remove jobs, bids or accounts that break these terms or the law.</p>
@@ -280,7 +285,7 @@ function registerPublicPages(app, { q, one, config, feePercent, proFeePercent, p
   let indexTpl = null;
   app.get(['/', '/index.html'], (req, res) => {
     if (!indexTpl || !config.production) indexTpl = fs.readFileSync(indexPath, 'utf8');
-    res.type('html').send(indexTpl.replace(/__BASE_URL__/g, esc(baseFor(req))));
+    res.type('html').send(indexTpl.replace(/__BASE_URL__/g, esc(baseFor(req))).replace('<!--OFFER-->', offerBanner()));
   });
 
   // ---------- public teaser for the front page (no titles, photos, descriptions or addresses) ----------

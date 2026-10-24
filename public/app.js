@@ -4,8 +4,10 @@
   const state = { user: null, config: { categories: [], loadSizes: [], maxImages: 4, paymentMode: 'off', feePercent: 10, requireCarrier: false, autoReleaseHours: 24, plus: { available: false, feePercent: 6, pricePence: 295 }, pro: { available: false, feePercent: 6, pricePence: 499 } } };
   const isPlus = () => Boolean(state.user && state.user.plus && state.user.plus.active);
   const isPro = () => Boolean(state.user && state.user.pro && state.user.pro.active);
-  const myFee = () => (isPlus() ? state.config.plus.feePercent : state.config.feePercent);
-  const myHaulerFee = () => (isPro() ? state.config.pro.feePercent : state.config.feePercent);
+  // First month free: new accounts pay no fees until freeUntil.
+  const isFreeMonth = () => Boolean(state.user && state.user.freeUntil && state.user.freeUntil > Date.now());
+  const myFee = () => (isFreeMonth() ? 0 : isPlus() ? state.config.plus.feePercent : state.config.feePercent);
+  const myHaulerFee = () => (isFreeMonth() ? 0 : isPro() ? state.config.pro.feePercent : state.config.feePercent);
   let pollTimer = null;
   let tickTimer = null;
 
@@ -69,7 +71,20 @@
   function stopTimers() { clearInterval(pollTimer); pollTimer = null; }
 
   // ---------- nav ----------
+  const haulerFeeNote = (l) => ((l.providerFeePercent ?? state.config.feePercent) === 0 ? 'with no fee (first month free)' : `after the ${l.providerFeePercent ?? state.config.feePercent}% fee`);
+  // The special offer strip (rendered by the server) is personalised once we know who is logged in.
+  function renderOffer() {
+    const strip = document.querySelector('.offer-strip .wrap');
+    if (!strip) return;
+    const freeUntil = state.user && state.user.freeUntil;
+    strip.parentElement.hidden = Boolean(state.user && !isFreeMonth());
+    if (freeUntil) {
+      const day = new Date(freeUntil).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' });
+      strip.replaceChildren(h('b', { text: 'Your first month is free:' }), ` no fees on any job you book or win until ${day}.`);
+    }
+  }
   function renderNav() {
+    renderOffer();
     const route = location.hash || '#/';
     const link = (href, text, cls) => h('a', { href, text, class: (cls || '') + (route === href ? ' active' : '') });
     // Signed-out visitors only get the sign-in and sign-up buttons.
@@ -489,8 +504,8 @@
         h('label', {}, 'Collect from', h('input', { name: 'collectFrom', type: 'date', min: isoDay(0), value: isoDay(3), required: true })),
         h('label', {}, 'Collect by', h('input', { name: 'collectBy', type: 'date', min: isoDay(0), value: isoDay(10), required: true })),
         h('label', {}, 'Starting price (£)', h('input', { name: 'startPrice', type: 'number', min: 1, step: '0.01', required: true, readonly: !!state.config.requirePriceGuide, placeholder: state.config.requirePriceGuide ? 'Set from your items' : null }),
-          h('span', { class: 'hint' }, `Bids start here and go down. A ${myFee()}% service fee is added when you pay.`,
-            !isPlus() && state.config.plus.available ? [' ', h('a', { href: '#/plus', text: `Pay ${state.config.plus.feePercent}% with Plus` })] : null)),
+          h('span', { class: 'hint' }, isFreeMonth() ? 'Bids start here and go down. No service fee while your first month is free.' : `Bids start here and go down. A ${myFee()}% service fee is added when you pay.`,
+            !isPlus() && !isFreeMonth() && state.config.plus.available ? [' ', h('a', { href: '#/plus', text: `Pay ${state.config.plus.feePercent}% with Plus` })] : null)),
         h('label', {}, 'Bidding open for', h('select', { name: 'durationHours' },
           ...Array.from({ length: 23 }, (_, i) => i + 1).map((hours) => h('option', { value: hours, text: `${hours} ${hours === 1 ? 'hour' : 'hours'}`, selected: hours === 3 })))),
         h('label', {}, 'Town or postcode area', h('input', { name: 'location', maxlength: 100, required: true, placeholder: 'e.g. Leeds LS6' }),
@@ -568,8 +583,8 @@
           const amount = h('input', { type: 'number', step: '0.01', min: 1, max: l.maxNextBidCents / 100, value: (l.maxNextBidCents / 100).toFixed(2), 'aria-label': 'Your price in pounds' });
           const form = h('form', { novalidate: true },
             h('div', { class: 'bid-row' }, amount, h('button', { class: 'btn', type: 'submit', text: 'Place bid' })),
-            h('div', { class: 'hint' }, `Your price for the whole job. Must be ${money(l.maxNextBidCents)} or less${l.regularLowCents && !l.bidCount ? `, under the ${money(l.regularLowCents)} other waste companies charge` : ''}. You receive ${100 - myHaulerFee()}% of your bid after our ${myHaulerFee()}% fee.`,
-              !isPro() && state.config.pro.available ? [' ', h('a', { href: '#/plus', text: `Keep ${100 - state.config.pro.feePercent}% with Hauler Pro` })] : null));
+            h('div', { class: 'hint' }, `Your price for the whole job. Must be ${money(l.maxNextBidCents)} or less${l.regularLowCents && !l.bidCount ? `, under the ${money(l.regularLowCents)} other waste companies charge` : ''}. ${isFreeMonth() ? 'You keep 100% of your bid while your first month is free.' : `You receive ${100 - myHaulerFee()}% of your bid after our ${myHaulerFee()}% fee.`}`,
+              !isPro() && !isFreeMonth() && state.config.pro.available ? [' ', h('a', { href: '#/plus', text: `Keep ${100 - state.config.pro.feePercent}% with Hauler Pro` })] : null));
           form.addEventListener('submit', async (e) => {
             e.preventDefault();
             if (!requireLogin()) return;
@@ -590,7 +605,7 @@
         }
       } else if (l.status === 'closed') {
         if (l.isSeller) panel.append(acceptBlock(l));
-        else if (l.isWinner) panel.append(h('div', { class: 'notice', text: `🎉 You have the lowest bid at ${money(l.winningBidCents)}. Waiting for the customer to accept and pay. You’ll receive ${money(l.providerPayoutCents)} after the ${l.providerFeePercent ?? state.config.feePercent}% fee.` }), payoutNudge());
+        else if (l.isWinner) panel.append(h('div', { class: 'notice', text: `🎉 You have the lowest bid at ${money(l.winningBidCents)}. Waiting for the customer to accept and pay. You’ll receive ${money(l.providerPayoutCents)} ${haulerFeeNote(l)}.` }), payoutNudge());
         else panel.append(h('div', { class: 'notice warn', text: 'Bidding on this job has closed.' }));
       } else if (l.status === 'paid') {
         panel.append(l.isWinner || l.isSeller ? bookedBlock(l) : h('div', { class: 'notice', text: 'This job has been booked.' }));
@@ -639,7 +654,7 @@
         btn.textContent = `Book ${picked.bidder} and pay ${money(totalFor(picked))}${mode === 'demo' ? ' (demo)' : ''}`;
         summary.replaceChildren(
           h('div', {}, h('dt', { text: 'Their price' }), h('dd', { text: money(picked.amountCents) })),
-          h('div', {}, h('dt', { text: `Service fee (${pct}%${pct < state.config.feePercent ? ', Plus' : ''})` }), h('dd', { text: money(totalFor(picked) - picked.amountCents) })),
+          h('div', {}, h('dt', { text: pct === 0 ? 'Service fee (first month free)' : `Service fee (${pct}%${pct < state.config.feePercent ? ', Plus' : ''})` }), h('dd', { text: money(totalFor(picked) - picked.amountCents) })),
           h('div', {}, h('dt', { text: 'Total to pay' }), h('dd', { text: money(totalFor(picked)) })));
       }
       const list = h('div', { class: 'choices', role: 'radiogroup', 'aria-label': 'Choose a hauler' }, ...choices.map((c, i) => {
@@ -677,7 +692,7 @@
       return h('div', { class: 'panel' },
         h('div', { class: 'notice', text: choices.length > 1 ? 'Bidding has closed. Choose who you’d like to book. The lowest price is picked for you, but you can choose a hauler with better reviews.' : `Bidding has closed. ${l.winnerName} offered ${money(l.winningBidCents)}.` }),
         list, summary,
-        !isPlus() && state.config.plus.available && h('p', { class: 'hint' }, `Plus members pay a ${state.config.plus.feePercent}% fee instead of ${state.config.feePercent}%. `,
+        !isPlus() && pct > 0 && state.config.plus.available && h('p', { class: 'hint' }, `Plus members pay a ${state.config.plus.feePercent}% fee instead of ${state.config.feePercent}%. `,
           h('a', { href: '#/plus', text: 'See Plus' })),
         mode === 'off' ? h('div', { class: 'notice warn', text: 'Online payment is not enabled yet.' }) : btn,
         decline,
@@ -687,7 +702,7 @@
     function bookedBlock(l) {
       const c = l.contact || {};
       return h('div', { class: 'panel' },
-        h('div', { class: 'notice', text: l.isSeller ? `✅ Booked and paid. ${c.name} will collect between ${when(l)}.` : `✅ Booked for ${money(l.winningBidCents)}. You’ll receive ${money(l.providerPayoutCents)} after the ${l.providerFeePercent ?? state.config.feePercent}% fee. Please collect between ${when(l)}.` }),
+        h('div', { class: 'notice', text: l.isSeller ? `✅ Booked and paid. ${c.name} will collect between ${when(l)}.` : `✅ Booked for ${money(l.winningBidCents)}. You’ll receive ${money(l.providerPayoutCents)} ${haulerFeeNote(l)}. Please collect between ${when(l)}.` }),
         h('dl', { class: 'facts' },
           h('div', {}, h('dt', { text: l.isSeller ? 'Your hauler' : 'Customer' }), h('dd', {}, c.name, l.isSeller && l.winnerRating ? [' ', stars(l.winnerRating)] : null)),
           h('div', {}, h('dt', { text: 'Email' }), h('dd', {}, h('a', { href: `mailto:${c.email}`, text: c.email }))),
